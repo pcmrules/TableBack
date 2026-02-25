@@ -13,20 +13,18 @@ type LoginPayload = {
 
 export async function POST(request: Request) {
   const ip = getClientIp(request)
-  const ipWindow = consumeRateLimit({
+  const window = consumeRateLimit({
     key: `auth:login:ip:${ip}`,
     windowMs: 15 * 60 * 1000,
     max: 20
   })
 
-  if (!ipWindow.ok) {
+  if (!window.ok) {
     return NextResponse.json(
-      { ok: false, error: "Te veel loginpogingen. Probeer later opnieuw." },
+      { ok: false, error: "Te veel login-pogingen. Probeer later opnieuw." },
       {
         status: 429,
-        headers: {
-          "Retry-After": String(ipWindow.retryAfterSeconds)
-        }
+        headers: { "Retry-After": String(window.retryAfterSeconds) }
       }
     )
   }
@@ -41,34 +39,15 @@ export async function POST(request: Request) {
     )
   }
 
-  const email = (body.email ?? "").trim().toLowerCase()
-  const accountWindow = consumeRateLimit({
-    key: `auth:login:acct:${email}:${ip}`,
-    windowMs: 10 * 60 * 1000,
-    max: 10
-  })
-
-  if (!accountWindow.ok) {
-    return NextResponse.json(
-      { ok: false, error: "Te veel loginpogingen. Probeer later opnieuw." },
-      {
-        status: 429,
-        headers: {
-          "Retry-After": String(accountWindow.retryAfterSeconds)
-        }
-      }
-    )
-  }
-
-  const user = authenticateUser(email, body.password ?? "")
+  const user = await authenticateUser(body.email ?? "", body.password ?? "")
   if (!user) {
     return NextResponse.json(
-      { ok: false, error: "Onjuiste inloggegevens." },
+      { ok: false, error: "E-mail of wachtwoord is onjuist." },
       { status: 401 }
     )
   }
 
-  const token = createSession(user.id)
+  const token = await createSession(user.id)
   const response = NextResponse.json({ ok: true, user })
   response.cookies.set({
     name: SESSION_COOKIE_NAME,
@@ -82,3 +61,4 @@ export async function POST(request: Request) {
 
   return response
 }
+

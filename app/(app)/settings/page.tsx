@@ -1,6 +1,6 @@
 "use client"
 
-import { FormEvent, useEffect, useMemo, useState } from "react"
+import { FormEvent, useMemo, useState } from "react"
 import { useReservations } from "@/context/ReservationContext"
 
 export default function SettingsPage() {
@@ -11,31 +11,42 @@ export default function SettingsPage() {
     updateAutomationSettings
   } = useReservations()
 
-  const [firstReminderMinutes, setFirstReminderMinutes] = useState(
-    reminderSettings.firstReminderMinutesBefore
-  )
-  const [finalReminderMinutes, setFinalReminderMinutes] = useState(
-    reminderSettings.finalReminderMinutesBefore
-  )
-  const [noShowThresholdMinutes, setNoShowThresholdMinutes] = useState(
-    automationSettings.noShowThresholdMinutes
-  )
-  const [waitlistResponseMinutes, setWaitlistResponseMinutes] = useState(
-    automationSettings.waitlistResponseMinutes
-  )
+  const [draft, setDraft] = useState<{
+    firstReminderMinutes: number
+    finalReminderMinutes: number
+    noShowThresholdMinutes: number
+    waitlistResponseMinutes: number
+  } | null>(null)
 
   const [error, setError] = useState("")
   const [saved, setSaved] = useState(false)
 
-  useEffect(() => {
-    setFirstReminderMinutes(reminderSettings.firstReminderMinutesBefore)
-    setFinalReminderMinutes(reminderSettings.finalReminderMinutesBefore)
-  }, [reminderSettings])
-
-  useEffect(() => {
-    setNoShowThresholdMinutes(automationSettings.noShowThresholdMinutes)
-    setWaitlistResponseMinutes(automationSettings.waitlistResponseMinutes)
-  }, [automationSettings])
+  const firstReminderMinutes =
+    draft?.firstReminderMinutes ?? reminderSettings.firstReminderMinutesBefore
+  const finalReminderMinutes =
+    draft?.finalReminderMinutes ?? reminderSettings.finalReminderMinutesBefore
+  const noShowThresholdMinutes =
+    draft?.noShowThresholdMinutes ?? automationSettings.noShowThresholdMinutes
+  const waitlistResponseMinutes =
+    draft?.waitlistResponseMinutes ?? automationSettings.waitlistResponseMinutes
+  const updateDraft = (
+    key:
+      | "firstReminderMinutes"
+      | "finalReminderMinutes"
+      | "noShowThresholdMinutes"
+      | "waitlistResponseMinutes",
+    value: number
+  ) => {
+    setDraft(prev => {
+      const base = prev ?? {
+        firstReminderMinutes,
+        finalReminderMinutes,
+        noShowThresholdMinutes,
+        waitlistResponseMinutes
+      }
+      return { ...base, [key]: value }
+    })
+  }
 
   const hasChanges = useMemo(() => {
     return (
@@ -86,6 +97,7 @@ export default function SettingsPage() {
       preferredChannel: automationSettings.preferredChannel
     })
 
+    setDraft(null)
     setSaved(true)
 
     setTimeout(() => setSaved(false), 2500)
@@ -136,7 +148,7 @@ export default function SettingsPage() {
           type="number"
           min={1}
           value={firstReminderMinutes}
-          onChange={e => setFirstReminderMinutes(Number(e.target.value))}
+          onChange={e => updateDraft("firstReminderMinutes", Number(e.target.value))}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#d87a3b]"
         />
       </label>
@@ -149,7 +161,7 @@ export default function SettingsPage() {
           type="number"
           min={1}
           value={finalReminderMinutes}
-          onChange={e => setFinalReminderMinutes(Number(e.target.value))}
+          onChange={e => updateDraft("finalReminderMinutes", Number(e.target.value))}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#d87a3b]"
         />
       </label>
@@ -177,7 +189,7 @@ export default function SettingsPage() {
           type="number"
           min={1}
           value={noShowThresholdMinutes}
-          onChange={e => setNoShowThresholdMinutes(Number(e.target.value))}
+          onChange={e => updateDraft("noShowThresholdMinutes", Number(e.target.value))}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#d87a3b]"
         />
       </label>
@@ -190,7 +202,7 @@ export default function SettingsPage() {
           type="number"
           min={1}
           value={waitlistResponseMinutes}
-          onChange={e => setWaitlistResponseMinutes(Number(e.target.value))}
+          onChange={e => updateDraft("waitlistResponseMinutes", Number(e.target.value))}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#d87a3b]"
         />
       </label>

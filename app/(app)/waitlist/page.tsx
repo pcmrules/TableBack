@@ -319,7 +319,20 @@ function WaitlistRow({
 function formatWaitingTime(createdAt?: number): string {
   if (!createdAt) return "Wachttijd onbekend"
 
-  const diffMinutes = Math.max(1, Math.floor((Date.now() - createdAt) / 60000))
+  // Normalize unix timestamps coming from mixed units (seconds/ms/microseconds).
+  let normalizedCreatedAt = createdAt
+  if (normalizedCreatedAt < 1_000_000_000_000) {
+    normalizedCreatedAt = normalizedCreatedAt * 1000
+  } else if (normalizedCreatedAt > 10_000_000_000_000) {
+    normalizedCreatedAt = Math.floor(normalizedCreatedAt / 1000)
+  }
+
+  const diffMs = Date.now() - normalizedCreatedAt
+  if (!Number.isFinite(diffMs) || diffMs < 0) {
+    return "Wachttijd onbekend"
+  }
+
+  const diffMinutes = Math.max(1, Math.floor(diffMs / 60000))
   if (diffMinutes < 60) {
     return `${diffMinutes} min in wachtrij`
   }

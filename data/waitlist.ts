@@ -1,5 +1,5 @@
 export type WaitlistEntry = {
-  id: number
+  id: string
   name: string
   phone: string
   partySize: number

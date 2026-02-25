@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     )
   }
 
-  const result = createUser({
+  const result = await createUser({
     name: body.name ?? "",
     email,
     password: body.password ?? ""
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: result.error }, { status: 400 })
   }
 
-  const token = createSession(result.user.id)
+  const token = await createSession(result.user.id)
   const response = NextResponse.json({ ok: true, user: result.user })
   response.cookies.set({
     name: SESSION_COOKIE_NAME,

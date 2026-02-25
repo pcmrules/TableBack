@@ -1,20 +1,21 @@
 "use client"
 
+import { supabase } from "@/lib/supabaseClient"
+
 import {
   createContext,
   useContext,
   useState,
   useEffect,
+  useCallback,
   ReactNode,
   useRef
 } from "react"
 
 import {
-  reservations as initialReservations,
   Reservation
 } from "@/data/reservations"
 
-import { initialWaitlist } from "@/data/waitlist"
 import type { WaitlistEntry } from "@/data/waitlist"
 import { normalizePhone } from "@/lib/phone"
 import {
@@ -25,11 +26,83 @@ import {
   type ReminderSettings
 } from "@/lib/shared/settings"
 
-type PersistedStatePayload = {
-  reservations: Reservation[]
-  waitlist: WaitlistEntry[]
-  reminderSettings: ReminderSettings
-  automationSettings: AutomationSettings
+type ReservationRow = {
+  id: string
+  user_id: string | null
+  name: string
+  phone: string | null
+  time: string
+  created_at: string | null
+  party_size: number
+  status: Reservation["status"]
+  filled_from_waitlist: boolean | null
+  original_guest_name: string | null
+  estimated_revenue: number
+  reminder_count: number | null
+  last_reminder_at: string | null
+}
+
+type WaitlistRow = {
+  id: string
+  user_id: string | null
+  name: string
+  phone: string
+  party_size: number
+  status: "waiting" | "contacted" | "declined" | null
+  created_at: string | null
+  last_contacted_at: string | null
+}
+
+type SettingsRow = {
+  id?: number
+  user_id: string | null
+  first_reminder_minutes_before: number | null
+  final_reminder_minutes_before: number | null
+  no_show_threshold_minutes: number | null
+  waitlist_response_minutes: number | null
+  preferred_channel: ContactChannel | null
+}
+
+function parseDatabaseTimestamp(value: string | null): number | undefined {
+  if (!value) return undefined
+
+  const hasTimezone = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(value)
+  const normalized = value.includes(" ") ? value.replace(" ", "T") : value
+  const candidate = hasTimezone ? normalized : `${normalized}Z`
+  const parsed = Date.parse(candidate)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function reservationFromRow(row: ReservationRow): Reservation {
+  return normalizeReservation({
+    id: row.id,
+    name: row.name,
+    phone: row.phone ?? "",
+    time: row.time,
+    createdAt: parseDatabaseTimestamp(row.created_at) ?? Date.now(),
+    partySize: row.party_size,
+    status: row.status,
+    filledFromWaitlist: Boolean(row.filled_from_waitlist),
+    originalGuestName: row.original_guest_name ?? undefined,
+    estimatedRevenue: row.estimated_revenue,
+    reminderCount: typeof row.reminder_count === "number" ? row.reminder_count : 0,
+    lastReminderAt: parseDatabaseTimestamp(row.last_reminder_at)
+  })
+}
+
+function waitlistFromRow(row: WaitlistRow): WaitlistEntry {
+  return normalizeWaitlistEntry(
+    {
+      id: row.id,
+      name: row.name,
+      phone: row.phone,
+      partySize: row.party_size,
+      status: row.status ?? "waiting",
+      createdAt: parseDatabaseTimestamp(row.created_at),
+      lastContactedAt: parseDatabaseTimestamp(row.last_contacted_at)
+    },
+    Date.now()
+  )
 }
 
 function normalizeWaitlistEntry(
@@ -41,17 +114,6 @@ function normalizeWaitlistEntry(
     status: entry.status ?? "waiting",
     createdAt: entry.createdAt ?? fallbackCreatedAt
   }
-}
-
-function getDefaultWaitlist(): WaitlistEntry[] {
-  const now = Date.now()
-  return initialWaitlist.map((entry, index) =>
-    normalizeWaitlistEntry(entry, now - (initialWaitlist.length - index) * 600000)
-  )
-}
-
-function loadWaitlist(): WaitlistEntry[] {
-  return getDefaultWaitlist()
 }
 
 function getBrusselsNowParts(referenceTimestamp: number): {
@@ -187,10 +249,6 @@ function normalizeReservation(entry: Reservation): Reservation {
   }
 }
 
-function loadReservations(): Reservation[] {
-  return initialReservations.map(normalizeReservation)
-}
-
 type NewWaitlistEntry = {
   name: string
   phone: string
@@ -211,13 +269,13 @@ type ReservationContextType = {
   automationSettings: AutomationSettings
   toast: { message: string; id: number } | null
   addReservation: (entry: NewReservationEntry) => void
-  removeReservation: (id: number) => void
+  removeReservation: (id: string) => void
   clearReservations: () => void
   updateReminderSettings: (next: ReminderSettings) => void
   updateAutomationSettings: (next: AutomationSettings) => void
   addWaitlistEntry: (entry: NewWaitlistEntry) => void
-  removeWaitlistEntry: (id: number) => void
-  markWaitlistContacted: (id: number) => void
+  removeWaitlistEntry: (id: string) => void
+  markWaitlistContacted: (id: string) => void
 }
 
 const ReservationContext = createContext<ReservationContextType | undefined>(
@@ -229,11 +287,10 @@ export function ReservationProvider({
 }: {
   children: ReactNode
 }) {
-  const [reservations, setReservations] =
-    useState<Reservation[]>(loadReservations)
-
-  const [waitlist, setWaitlist] =
-    useState<WaitlistEntry[]>(loadWaitlist)
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([])
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [isAuthResolved, setIsAuthResolved] = useState(false)
 
   const [toast, setToast] =
     useState<{ message: string; id: number } | null>(null)
@@ -243,64 +300,52 @@ export function ReservationProvider({
     useState<AutomationSettings>(DEFAULT_AUTOMATION_SETTINGS)
   const [isHydratedFromServer, setIsHydratedFromServer] = useState(false)
 
-  const inFlightReservationIds = useRef<Set<number>>(new Set())
-  const fillTimeouts = useRef<Map<number, ReturnType<typeof setTimeout>>>(
+  const inFlightReservationIds = useRef<Set<string>>(new Set())
+  const fillTimeouts = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map()
   )
-  const pendingWaitlistMatches = useRef<Map<number, number>>(new Map())
-  const pendingFallbackStatuses = useRef<Map<number, Reservation["status"]>>(
+  const pendingWaitlistMatches = useRef<Map<string, string>>(new Map())
+  const pendingFallbackStatuses = useRef<Map<string, Reservation["status"]>>(
     new Map()
   )
   const reservationsRef = useRef<Reservation[]>(reservations)
   const sentReminderEvents = useRef<Set<string>>(new Set())
+  const syncTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSyncedSignature = useRef<string>("")
+
+  function buildSnapshotSignature(snapshot: {
+    reservations: Reservation[]
+    waitlist: WaitlistEntry[]
+    reminderSettings: ReminderSettings
+    automationSettings: AutomationSettings
+  }): string {
+    return JSON.stringify(snapshot)
+  }
 
   useEffect(() => {
     let active = true
 
     void (async () => {
       try {
-        const response = await fetch("/api/state", { cache: "no-store" })
+        const response = await fetch("/api/auth/session", { cache: "no-store" })
+        if (!active) return
+
         if (!response.ok) {
-          if (active) setIsHydratedFromServer(true)
+          setCurrentUserId(null)
+          setIsAuthResolved(true)
           return
         }
 
         const payload = (await response.json()) as {
           ok?: boolean
-          state?: Partial<PersistedStatePayload>
+          user?: { id?: string }
         }
-
-        if (!payload.ok || !payload.state) {
-          if (active) setIsHydratedFromServer(true)
-          return
-        }
-
-        if (active) {
-          setReservations(
-            Array.isArray(payload.state.reservations)
-              ? payload.state.reservations.map(normalizeReservation)
-              : []
-          )
-          setWaitlist(
-            Array.isArray(payload.state.waitlist)
-              ? payload.state.waitlist.map((entry, index, all) =>
-                  normalizeWaitlistEntry(
-                    entry,
-                    Date.now() - (all.length - index) * 600000
-                  )
-                )
-              : []
-          )
-          if (payload.state.reminderSettings) {
-            setReminderSettings(payload.state.reminderSettings)
-          }
-          if (payload.state.automationSettings) {
-            setAutomationSettings(payload.state.automationSettings)
-          }
-          setIsHydratedFromServer(true)
-        }
+        setCurrentUserId(payload.ok && payload.user?.id ? payload.user.id : null)
       } catch {
-        if (active) setIsHydratedFromServer(true)
+        if (!active) return
+        setCurrentUserId(null)
+      } finally {
+        if (active) setIsAuthResolved(true)
       }
     })()
 
@@ -308,6 +353,184 @@ export function ReservationProvider({
       active = false
     }
   }, [])
+
+  const fetchReservationsFromDatabase = useCallback(async (): Promise<
+    Reservation[]
+  > => {
+    if (!currentUserId) return []
+
+    const { data, error } = await supabase
+      .from("reservations")
+      .select("*")
+      .eq("user_id", currentUserId)
+      .order("created_at", { ascending: true })
+
+    if (error) {
+      console.error("Supabase reservations fetch error:", error)
+      return []
+    }
+
+    const rows = (data ?? []) as unknown as ReservationRow[]
+    return rows.map(reservationFromRow)
+  }, [currentUserId])
+
+  const fetchWaitlistFromDatabase = useCallback(async (): Promise<
+    WaitlistEntry[]
+  > => {
+    if (!currentUserId) return []
+
+    const { data, error } = await supabase
+      .from("waitlist")
+      .select("*")
+      .eq("user_id", currentUserId)
+      .order("created_at", { ascending: true })
+
+    if (error) {
+      console.error("Supabase waitlist fetch error:", error)
+      return []
+    }
+
+    const rows = (data ?? []) as unknown as WaitlistRow[]
+    return rows.map(waitlistFromRow)
+  }, [currentUserId])
+
+  const fetchSettingsFromDatabase = useCallback(async (): Promise<{
+    reminder: ReminderSettings
+    automation: AutomationSettings
+  }> => {
+    if (!currentUserId) {
+      return {
+        reminder: DEFAULT_REMINDER_SETTINGS,
+        automation: DEFAULT_AUTOMATION_SETTINGS
+      }
+    }
+
+    const { data, error } = await supabase
+      .from("settings")
+      .select("*")
+      .eq("user_id", currentUserId)
+      .maybeSingle()
+
+    if (error) {
+      console.error("Supabase settings fetch error:", error)
+      return {
+        reminder: DEFAULT_REMINDER_SETTINGS,
+        automation: DEFAULT_AUTOMATION_SETTINGS
+      }
+    }
+
+    if (!data) {
+      return {
+        reminder: DEFAULT_REMINDER_SETTINGS,
+        automation: DEFAULT_AUTOMATION_SETTINGS
+      }
+    }
+
+    const row = data as unknown as SettingsRow
+    const preferredChannel =
+      row.preferred_channel === "whatsapp" ||
+      row.preferred_channel === "sms" ||
+      row.preferred_channel === "email"
+        ? row.preferred_channel
+        : DEFAULT_AUTOMATION_SETTINGS.preferredChannel
+
+    return {
+      reminder: {
+        firstReminderMinutesBefore:
+          row.first_reminder_minutes_before ??
+          DEFAULT_REMINDER_SETTINGS.firstReminderMinutesBefore,
+        finalReminderMinutesBefore:
+          row.final_reminder_minutes_before ??
+          DEFAULT_REMINDER_SETTINGS.finalReminderMinutesBefore
+      },
+      automation: {
+        noShowThresholdMinutes:
+          row.no_show_threshold_minutes ??
+          DEFAULT_AUTOMATION_SETTINGS.noShowThresholdMinutes,
+        waitlistResponseMinutes:
+          row.waitlist_response_minutes ??
+          DEFAULT_AUTOMATION_SETTINGS.waitlistResponseMinutes,
+        preferredChannel
+      }
+    }
+  }, [currentUserId])
+
+  const reloadFromDatabase = useCallback(async (): Promise<void> => {
+    const [nextReservations, nextWaitlist, settings] = await Promise.all([
+      fetchReservationsFromDatabase(),
+      fetchWaitlistFromDatabase(),
+      fetchSettingsFromDatabase()
+    ])
+
+    setReservations(nextReservations)
+    setWaitlist(nextWaitlist)
+    setReminderSettings(settings.reminder)
+    setAutomationSettings(settings.automation)
+    lastSyncedSignature.current = buildSnapshotSignature({
+      reservations: nextReservations,
+      waitlist: nextWaitlist,
+      reminderSettings: settings.reminder,
+      automationSettings: settings.automation
+    })
+  }, [
+    fetchReservationsFromDatabase,
+    fetchSettingsFromDatabase,
+    fetchWaitlistFromDatabase
+  ])
+
+  const syncSnapshotToDatabase = useCallback(async (snapshot: {
+    reservations: Reservation[]
+    waitlist: WaitlistEntry[]
+    reminderSettings: ReminderSettings
+    automationSettings: AutomationSettings
+  }): Promise<void> => {
+    if (!currentUserId) return
+
+    const response = await fetch("/api/state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(snapshot)
+    })
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string
+      }
+      setToast({
+        message: payload.error
+          ? `Sync fout: ${payload.error}`
+          : "Sync fout: kon serverstate niet opslaan",
+        id: Date.now()
+      })
+      return
+    }
+    lastSyncedSignature.current = buildSnapshotSignature(snapshot)
+  }, [currentUserId])
+
+  useEffect(() => {
+    let active = true
+
+    void (async () => {
+      if (!currentUserId) {
+        if (active) {
+          setReservations([])
+          setWaitlist([])
+          setReminderSettings(DEFAULT_REMINDER_SETTINGS)
+          setAutomationSettings(DEFAULT_AUTOMATION_SETTINGS)
+          setIsHydratedFromServer(isAuthResolved)
+        }
+        return
+      }
+      await reloadFromDatabase()
+      if (active) {
+        setIsHydratedFromServer(true)
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [currentUserId, isAuthResolved, reloadFromDatabase])
 
   useEffect(() => {
     reservationsRef.current = reservations
@@ -320,7 +543,7 @@ export function ReservationProvider({
       const nowBrusselsTimestamp = getNowInBrusselsTimestamp(now)
       const currentReservations = reservationsRef.current
       const updates = new Map<
-        number,
+        string,
         {
           status: Reservation["status"]
           reminderCount: number
@@ -470,8 +693,8 @@ export function ReservationProvider({
       )
 
       void (async () => {
-        const confirmedIds = new Set<number>()
-        const declinedIds = new Set<number>()
+        const confirmedIds = new Set<string>()
+        const declinedIds = new Set<string>()
 
         for (const reservation of attentionReservations) {
           const payload = await getWhatsAppConfirmation(reservation.phone)
@@ -534,35 +757,49 @@ export function ReservationProvider({
   useEffect(() => {
     if (!isHydratedFromServer) return
 
-    const timeout = setTimeout(() => {
-      void fetch("/api/state", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          reservations,
-          waitlist,
-          reminderSettings,
-          automationSettings
-        })
-      })
+    if (syncTimeout.current) {
+      clearTimeout(syncTimeout.current)
+    }
+
+    const snapshot = {
+      reservations,
+      waitlist,
+      reminderSettings,
+      automationSettings
+    }
+    const snapshotSignature = buildSnapshotSignature(snapshot)
+    if (snapshotSignature === lastSyncedSignature.current) return
+
+    syncTimeout.current = setTimeout(() => {
+      void syncSnapshotToDatabase(snapshot)
     }, 250)
 
-    return () => clearTimeout(timeout)
+    return () => {
+      if (syncTimeout.current) {
+        clearTimeout(syncTimeout.current)
+      }
+    }
   }, [
     isHydratedFromServer,
     reservations,
     waitlist,
     reminderSettings,
-    automationSettings
+    automationSettings,
+    syncSnapshotToDatabase
   ])
 
   function addReservation(entry: NewReservationEntry) {
+    if (!currentUserId) {
+      setToast({
+        message: "Niet ingelogd",
+        id: Date.now()
+      })
+      return
+    }
+
     const createdAt = Date.now()
     setReservations(prev => {
-      const nextId =
-        prev.length === 0 ? 1 : Math.max(...prev.map(item => item.id)) + 1
+      const nextId = crypto.randomUUID()
 
       return [
         ...prev,
@@ -589,7 +826,7 @@ export function ReservationProvider({
     })
   }
 
-  function clearReservationAutomationState(ids: number[]) {
+  function clearReservationAutomationState(ids: string[]) {
     for (const id of ids) {
       const timeout = fillTimeouts.current.get(id)
       if (timeout) {
@@ -604,7 +841,15 @@ export function ReservationProvider({
     }
   }
 
-  function removeReservation(id: number) {
+  function removeReservation(id: string) {
+    if (!currentUserId) {
+      setToast({
+        message: "Niet ingelogd",
+        id: Date.now()
+      })
+      return
+    }
+
     const existing = reservations.find(item => item.id === id)
     clearReservationAutomationState([id])
     setReservations(prev => prev.filter(item => item.id !== id))
@@ -618,6 +863,13 @@ export function ReservationProvider({
   }
 
   function clearReservations() {
+    if (!currentUserId) {
+      setToast({
+        message: "Niet ingelogd",
+        id: Date.now()
+      })
+      return
+    }
     if (reservations.length === 0) return
     clearReservationAutomationState(reservations.map(item => item.id))
     setReservations([])
@@ -635,31 +887,43 @@ export function ReservationProvider({
     setAutomationSettings(next)
   }
 
-  function addWaitlistEntry(entry: NewWaitlistEntry) {
+  function addWaitlistEntry({ name, phone, partySize }: NewWaitlistEntry) {
+    if (!currentUserId) {
+      setToast({
+        message: "Niet ingelogd",
+        id: Date.now()
+      })
+      return
+    }
     setWaitlist(prev => {
-      const nextId =
-        prev.length === 0 ? 1 : Math.max(...prev.map(item => item.id)) + 1
+      const nextId = crypto.randomUUID()
 
       return [
         ...prev,
         {
           id: nextId,
-          name: entry.name,
-          phone: entry.phone,
-          partySize: entry.partySize,
+          name,
+          phone,
+          partySize,
           status: "waiting",
           createdAt: Date.now()
         }
       ]
     })
-
     setToast({
-      message: `${entry.name} toegevoegd aan de wachtlijst`,
+      message: `${name} toegevoegd aan de wachtlijst`,
       id: Date.now()
     })
   }
 
-  function removeWaitlistEntry(id: number) {
+  function removeWaitlistEntry(id: string) {
+    if (!currentUserId) {
+      setToast({
+        message: "Niet ingelogd",
+        id: Date.now()
+      })
+      return
+    }
     const removedEntry = waitlist.find(entry => entry.id === id)
     setWaitlist(prev => prev.filter(entry => entry.id !== id))
 
@@ -671,7 +935,7 @@ export function ReservationProvider({
     }
   }
 
-  function markWaitlistContacted(id: number) {
+  function markWaitlistContacted(id: string) {
     const entry = waitlist.find(item => item.id === id)
     if (!entry) return
 
@@ -682,7 +946,7 @@ export function ReservationProvider({
           reservation.partySize === entry.partySize &&
           !inFlightReservationIds.current.has(reservation.id)
       )
-      .sort((a, b) => a.id - b.id)[0]
+      .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))[0]
 
     if (!candidateReservation) {
       setToast({
@@ -1034,6 +1298,57 @@ export function ReservationProvider({
 
     return () => clearInterval(interval)
   }, [waitlist])
+
+  useEffect(() => {
+    if (!currentUserId) return
+
+    let reloadTimeout: ReturnType<typeof setTimeout> | null = null
+    const scheduleReload = () => {
+      if (reloadTimeout) clearTimeout(reloadTimeout)
+      reloadTimeout = setTimeout(() => {
+        void reloadFromDatabase()
+      }, 150)
+    }
+
+    const channel = supabase
+      .channel(`tableback-sync-${currentUserId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "reservations",
+          filter: `user_id=eq.${currentUserId}`
+        },
+        scheduleReload
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "waitlist",
+          filter: `user_id=eq.${currentUserId}`
+        },
+        scheduleReload
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "settings",
+          filter: `user_id=eq.${currentUserId}`
+        },
+        scheduleReload
+      )
+      .subscribe()
+
+    return () => {
+      if (reloadTimeout) clearTimeout(reloadTimeout)
+      void supabase.removeChannel(channel)
+    }
+  }, [currentUserId, reloadFromDatabase])
 
   useEffect(() => {
     const timeouts = fillTimeouts.current

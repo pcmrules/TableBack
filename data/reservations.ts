@@ -1,5 +1,5 @@
 export type Reservation = {
-  id: number
+  id: string
   name: string
   phone: string
   time: string

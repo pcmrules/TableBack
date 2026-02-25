@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TableBack
 
-## Getting Started
+TableBack is a Next.js app for reservation + waitlist management with WhatsApp automation.
 
-First, run the development server:
+## Architecture
+
+- UI state lives in `ReservationContext`.
+- Persistence is server-side via `PUT /api/state`.
+- `GET /api/state` hydrates the app from Supabase per logged-in user.
+- Supabase writes use service-role only on the server (`lib/server/supabaseAdmin.ts`).
+- Client uses anon key for reads/realtime only.
+
+## Required Env Vars
+
+Create `tableback/.env.local`:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+
+TWILIO_ACCOUNT_SID=<sid>
+TWILIO_AUTH_TOKEN=<token>
+TWILIO_WHATSAPP_FROM=+14155238886
+TWILIO_WEBHOOK_URL=https://<public-domain>/api/whatsapp/webhook
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Run Locally
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+App runs on `http://localhost:3000`.
 
-## Learn More
+## Supabase Expectations
 
-To learn more about Next.js, take a look at the following resources:
+Tables:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `public.reservations`
+- `public.waitlist`
+- `public.settings`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Minimum columns:
 
-## Deploy on Vercel
+- all tables: `id` (UUID or numeric primary key) and `user_id` (text/uuid)
+- `reservations`: `name`, `phone`, `time`, `created_at`, `party_size`, `status`, `filled_from_waitlist`, `original_guest_name`, `estimated_revenue`, `reminder_count`, `last_reminder_at`
+- `waitlist`: `name`, `phone`, `party_size`, `status`, `created_at`, `last_contacted_at`
+- `settings`: `first_reminder_minutes_before`, `final_reminder_minutes_before`, `no_show_threshold_minutes`, `waitlist_response_minutes`, `preferred_channel`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Recommended:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- unique constraint/index on `settings(user_id)`
+- realtime publication enabled for `reservations`, `waitlist`, `settings`
+
+## Health Check
+
+Use:
+
+- `GET /api/health/db`
+
+Returns DB read status for the logged-in user. Useful to verify session + server Supabase connectivity.
+
+## Notes
+
+- Table Editor in Supabase dashboard is not a reliable realtime UI; manual refresh there is normal.
+- Realtime should be validated in two app tabs (change in tab A appears in tab B).
