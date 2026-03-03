@@ -42,6 +42,7 @@ Notes:
 - Voor pure SMS zonder Messaging Service: zet `TWILIO_SMS_FROM`.
 - Voor inbound SMS replies: zet in Twilio de webhook naar `/api/sms/webhook` (of configureer `TWILIO_SMS_WEBHOOK_URL` voor signature-validatie).
 - Tijdelijke debug: zet `TWILIO_SKIP_SIGNATURE_VALIDATION=true` om te testen of webhook-verwerking werkt zonder signature-check.
+- Zonder inbound SMS-capability kunnen gasten nog steeds bevestigen via link: `/api/sms/respond?phone=...&action=yes|no`.
 - Voor business/production WhatsApp zijn template-berichten nodig buiten het 24-uurs venster na laatste klantreactie.
 - Als je `TWILIO_TEMPLATE_*_SID` zet, verstuurt de app automatisch via `ContentSid` i.p.v. vrije tekst.
 

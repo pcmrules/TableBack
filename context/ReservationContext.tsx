@@ -229,6 +229,19 @@ function supportsReplyAutomation(channel: ContactChannel): boolean {
   return isWhatsAppChannel(channel) || isSmsChannel(channel)
 }
 
+function buildSmsResponseLinks(phone: string): { yes: string; no: string } | null {
+  if (typeof window === "undefined") return null
+  const normalizedPhone = normalizePhone(phone)
+  if (!normalizedPhone) return null
+
+  const origin = window.location.origin
+  const base = `${origin}/api/sms/respond?phone=${encodeURIComponent(normalizedPhone)}`
+  return {
+    yes: `${base}&action=yes`,
+    no: `${base}&action=no`
+  }
+}
+
 type NewWaitlistEntry = {
   name: string
   phone: string
@@ -622,9 +635,13 @@ export function ReservationProvider({
           })
         }
         if (isSmsChannel(automationSettings.preferredChannel)) {
+          const links = buildSmsResponseLinks(outbound.phone)
+          const smsText = links
+            ? `${outbound.text} Bevestig: ${links.yes} Weiger: ${links.no}`
+            : outbound.text
           void sendSmsMessage(
             outbound.phone,
-            outbound.text,
+            smsText,
             "reservation_confirmation"
           ).catch(error => {
             setToast({
@@ -1066,9 +1083,13 @@ export function ReservationProvider({
       })
     }
     if (smsEnabled && entry.phone.trim()) {
+      const links = buildSmsResponseLinks(entry.phone)
+      const smsText = links
+        ? `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Bevestig: ${links.yes} Weiger: ${links.no}`
+        : `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Antwoord met JA om te bevestigen of NEE om over te slaan.`
       void sendSmsMessage(
         entry.phone,
-        `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Antwoord met JA om te bevestigen of NEE om over te slaan.`,
+        smsText,
         "waitlist_offer",
         offerExpiresAt
       ).catch(error => {
@@ -1194,9 +1215,13 @@ export function ReservationProvider({
       })
     }
     if (smsEnabled && match.phone.trim()) {
+      const links = buildSmsResponseLinks(match.phone)
+      const smsText = links
+        ? `Er is nu een tafel vrijgekomen voor ${match.partySize} personen. Bevestig: ${links.yes} Weiger: ${links.no}`
+        : `Er is nu een tafel vrijgekomen voor ${match.partySize} personen. Antwoord met JA om deze te nemen of NEE om over te slaan.`
       void sendSmsMessage(
         match.phone,
-        `Er is nu een tafel vrijgekomen voor ${match.partySize} personen. Antwoord met JA om deze te nemen of NEE om over te slaan.`,
+        smsText,
         "waitlist_offer",
         offerExpiresAt
       ).catch(error => {
