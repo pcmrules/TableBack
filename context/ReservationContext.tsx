@@ -175,14 +175,16 @@ async function sendWhatsAppMessage(
 
 async function sendSmsMessage(
   to: string,
-  message: string
+  message: string,
+  conversationType: "reservation_confirmation" | "waitlist_offer",
+  offerExpiresAt?: number
 ): Promise<void> {
   const response = await fetch("/api/sms/send", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ to, message })
+    body: JSON.stringify({ to, message, conversationType, offerExpiresAt })
   })
 
   if (!response.ok) {
@@ -221,6 +223,10 @@ function normalizeReservation(entry: Reservation): Reservation {
     reminderCount:
       typeof entry.reminderCount === "number" ? entry.reminderCount : 0
   }
+}
+
+function supportsReplyAutomation(channel: ContactChannel): boolean {
+  return isWhatsAppChannel(channel) || isSmsChannel(channel)
 }
 
 type NewWaitlistEntry = {
@@ -616,7 +622,11 @@ export function ReservationProvider({
           })
         }
         if (isSmsChannel(automationSettings.preferredChannel)) {
-          void sendSmsMessage(outbound.phone, outbound.text).catch(error => {
+          void sendSmsMessage(
+            outbound.phone,
+            outbound.text,
+            "reservation_confirmation"
+          ).catch(error => {
             setToast({
               message: `SMS fout: ${error.message}`,
               id: Date.now()
@@ -643,7 +653,7 @@ export function ReservationProvider({
           reservation.reminderCount > 0 &&
           reservation.phone.trim().length > 0
       )
-      if (!isWhatsAppChannel(automationSettings.preferredChannel)) return
+      if (!supportsReplyAutomation(automationSettings.preferredChannel)) return
 
       void (async () => {
         const confirmedIds = new Set<string>()
@@ -891,6 +901,9 @@ export function ReservationProvider({
   function markWaitlistContacted(id: string) {
     const entry = waitlist.find(item => item.id === id)
     if (!entry) return
+    const replyAutomationEnabled = supportsReplyAutomation(
+      automationSettings.preferredChannel
+    )
     const whatsappEnabled = isWhatsAppChannel(automationSettings.preferredChannel)
     const smsEnabled = isSmsChannel(automationSettings.preferredChannel)
 
@@ -911,7 +924,7 @@ export function ReservationProvider({
       return
     }
 
-    if (!whatsappEnabled) {
+    if (!replyAutomationEnabled) {
       setWaitlist(prev =>
         prev.map(waitlistEntry =>
           waitlistEntry.id === id
@@ -923,18 +936,6 @@ export function ReservationProvider({
             : waitlistEntry
         )
       )
-
-      if (smsEnabled && entry.phone.trim()) {
-        void sendSmsMessage(
-          entry.phone,
-          `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Gelieve ons te bellen om te bevestigen.`
-        ).catch(error => {
-          setToast({
-            message: `SMS fout: ${error.message}`,
-            id: Date.now()
-          })
-        })
-      }
 
       setToast({
         message: `${entry.name} gecontacteerd via ${formatChannelLabel(automationSettings.preferredChannel)} (manuele opvolging)`,
@@ -1018,7 +1019,7 @@ export function ReservationProvider({
       id: Date.now()
     })
 
-    if (entry.phone.trim()) {
+    if (whatsappEnabled && entry.phone.trim()) {
       void sendWhatsAppMessage(
         entry.phone,
         `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Antwoord met JA om te bevestigen of NEE om over te slaan.`,
@@ -1067,7 +1068,9 @@ export function ReservationProvider({
     if (smsEnabled && entry.phone.trim()) {
       void sendSmsMessage(
         entry.phone,
-        `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Antwoord met JA om te bevestigen of NEE om over te slaan.`
+        `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Antwoord met JA om te bevestigen of NEE om over te slaan.`,
+        "waitlist_offer",
+        offerExpiresAt
       ).catch(error => {
         setToast({
           message: `SMS fout: ${error.message}`,
@@ -1079,7 +1082,8 @@ export function ReservationProvider({
 
   // MATCHING ENGINE
   useEffect(() => {
-    if (!isWhatsAppChannel(automationSettings.preferredChannel)) return
+    if (!supportsReplyAutomation(automationSettings.preferredChannel)) return
+    const whatsappEnabled = isWhatsAppChannel(automationSettings.preferredChannel)
     const smsEnabled = isSmsChannel(automationSettings.preferredChannel)
 
     const expiredReservation = reservations.find(
@@ -1144,7 +1148,7 @@ export function ReservationProvider({
       Math.max(automationSettings.waitlistResponseMinutes, 1) * 60000
     const offerExpiresAt = Date.now() + responseTimeoutMs
 
-    if (match.phone.trim()) {
+    if (whatsappEnabled && match.phone.trim()) {
       void sendWhatsAppMessage(
         match.phone,
         `Er is nu een tafel vrijgekomen voor ${match.partySize} personen. Antwoord met JA om deze te nemen of NEE om over te slaan.`,
@@ -1192,7 +1196,9 @@ export function ReservationProvider({
     if (smsEnabled && match.phone.trim()) {
       void sendSmsMessage(
         match.phone,
-        `Er is nu een tafel vrijgekomen voor ${match.partySize} personen. Antwoord met JA om deze te nemen of NEE om over te slaan.`
+        `Er is nu een tafel vrijgekomen voor ${match.partySize} personen. Antwoord met JA om deze te nemen of NEE om over te slaan.`,
+        "waitlist_offer",
+        offerExpiresAt
       ).catch(error => {
         setToast({
           message: `SMS fout: ${error.message}`,

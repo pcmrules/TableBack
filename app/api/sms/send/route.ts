@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server"
 import { normalizePhone } from "@/lib/phone"
 import { getSessionUserFromCookieHeader } from "@/lib/server/auth"
+import { setPhoneConfirmation } from "@/lib/whatsappState"
+import type { WhatsAppConversationType } from "@/lib/whatsappState"
 
 type SendSmsPayload = {
   to: string
   message: string
+  conversationType?: WhatsAppConversationType
+  offerExpiresAt?: number
 }
 
 export async function POST(request: Request) {
@@ -25,6 +29,17 @@ export async function POST(request: Request) {
 
   const to = body.to?.trim()
   const message = body.message?.trim()
+  const conversationType =
+    body.conversationType === "waitlist_offer"
+      ? "waitlist_offer"
+      : "reservation_confirmation"
+  const offerExpiresAt =
+    conversationType === "waitlist_offer" &&
+    typeof body.offerExpiresAt === "number" &&
+    Number.isFinite(body.offerExpiresAt) &&
+    body.offerExpiresAt > Date.now()
+      ? body.offerExpiresAt
+      : null
 
   if (!to || !message) {
     return NextResponse.json(
@@ -70,6 +85,16 @@ export async function POST(request: Request) {
   if (statusCallbackUrl?.trim()) {
     form.set("StatusCallback", statusCallbackUrl.trim())
   }
+
+  setPhoneConfirmation(normalizedTo, {
+    confirmed: false,
+    declined: false,
+    lastReply: "",
+    updatedAt: Date.now(),
+    conversationType,
+    offerExpiresAt,
+    offerClosed: false
+  })
 
   const response = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,

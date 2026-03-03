@@ -26,6 +26,8 @@ TWILIO_SMS_FROM=+<jouw-sms-nummer>
 TWILIO_MESSAGING_SERVICE_SID=<optioneel-mgxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
 TWILIO_STATUS_CALLBACK_URL=https://<public-domain>/api/whatsapp/status
 TWILIO_WEBHOOK_URL=https://<public-domain>/api/whatsapp/webhook
+TWILIO_SMS_WEBHOOK_URL=https://<public-domain>/api/sms/webhook
+TWILIO_SKIP_SIGNATURE_VALIDATION=false
 TWILIO_TEMPLATE_REMINDER_FIRST_SID=<optioneel-hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
 TWILIO_TEMPLATE_REMINDER_FINAL_SID=<optioneel-hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
 TWILIO_TEMPLATE_CONFIRMATION_SID=<optioneel-hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
@@ -38,6 +40,8 @@ Notes:
 - Gebruik in productie je eigen goedgekeurde WhatsApp sender; niet het Twilio sandbox nummer `+14155238886`.
 - Zet minimaal `TWILIO_WHATSAPP_FROM` of `TWILIO_MESSAGING_SERVICE_SID` (beide mag ook).
 - Voor pure SMS zonder Messaging Service: zet `TWILIO_SMS_FROM`.
+- Voor inbound SMS replies: zet in Twilio de webhook naar `/api/sms/webhook` (of configureer `TWILIO_SMS_WEBHOOK_URL` voor signature-validatie).
+- Tijdelijke debug: zet `TWILIO_SKIP_SIGNATURE_VALIDATION=true` om te testen of webhook-verwerking werkt zonder signature-check.
 - Voor business/production WhatsApp zijn template-berichten nodig buiten het 24-uurs venster na laatste klantreactie.
 - Als je `TWILIO_TEMPLATE_*_SID` zet, verstuurt de app automatisch via `ContentSid` i.p.v. vrije tekst.
 
