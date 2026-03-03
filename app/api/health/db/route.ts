@@ -11,26 +11,53 @@ export async function GET(request: Request) {
     )
   }
 
-  const [settingsProbe, reservationsProbe, waitlistProbe] = await Promise.all([
+  const { data: restaurant, error: restaurantLookupError } = await supabaseAdmin
+    .from("restaurants")
+    .select("id")
+    .eq("owner_user_id", user.id)
+    .maybeSingle()
+
+  if (restaurantLookupError) {
+    return NextResponse.json(
+      { ok: false, error: restaurantLookupError.message, userId: user.id },
+      { status: 500 }
+    )
+  }
+  if (!restaurant?.id) {
+    return NextResponse.json(
+      { ok: false, error: "Geen restaurant gekoppeld.", userId: user.id },
+      { status: 400 }
+    )
+  }
+
+  const [settingsProbe, reservationsProbe, waitlistProbe, restaurantsProbe] = await Promise.all([
     supabaseAdmin
       .from("settings")
       .select("id")
-      .eq("user_id", user.id)
+      .eq("restaurant_id", restaurant.id)
       .limit(1),
     supabaseAdmin
       .from("reservations")
       .select("id")
-      .eq("user_id", user.id)
+      .eq("restaurant_id", restaurant.id)
       .limit(1),
     supabaseAdmin
       .from("waitlist")
       .select("id")
-      .eq("user_id", user.id)
+      .eq("restaurant_id", restaurant.id)
+      .limit(1),
+    supabaseAdmin
+      .from("restaurants")
+      .select("id")
+      .eq("owner_user_id", user.id)
       .limit(1)
   ])
 
   const firstError =
-    settingsProbe.error ?? reservationsProbe.error ?? waitlistProbe.error
+    settingsProbe.error ??
+    reservationsProbe.error ??
+    waitlistProbe.error ??
+    restaurantsProbe.error
 
   if (firstError) {
     return NextResponse.json(
@@ -49,8 +76,8 @@ export async function GET(request: Request) {
     checks: {
       settings: "ok",
       reservations: "ok",
-      waitlist: "ok"
+      waitlist: "ok",
+      restaurants: "ok"
     }
   })
 }
-

@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react"
 import { useReservations } from "@/context/ReservationContext"
+import type { ContactChannel } from "@/lib/shared/settings"
 
 export default function SettingsPage() {
   const {
@@ -16,6 +17,7 @@ export default function SettingsPage() {
     finalReminderMinutes: number
     noShowThresholdMinutes: number
     waitlistResponseMinutes: number
+    preferredChannel: ContactChannel
   } | null>(null)
 
   const [error, setError] = useState("")
@@ -29,20 +31,24 @@ export default function SettingsPage() {
     draft?.noShowThresholdMinutes ?? automationSettings.noShowThresholdMinutes
   const waitlistResponseMinutes =
     draft?.waitlistResponseMinutes ?? automationSettings.waitlistResponseMinutes
+  const preferredChannel =
+    draft?.preferredChannel ?? automationSettings.preferredChannel
   const updateDraft = (
     key:
       | "firstReminderMinutes"
       | "finalReminderMinutes"
       | "noShowThresholdMinutes"
-      | "waitlistResponseMinutes",
-    value: number
+      | "waitlistResponseMinutes"
+      | "preferredChannel",
+    value: number | ContactChannel
   ) => {
     setDraft(prev => {
       const base = prev ?? {
         firstReminderMinutes,
         finalReminderMinutes,
         noShowThresholdMinutes,
-        waitlistResponseMinutes
+        waitlistResponseMinutes,
+        preferredChannel
       }
       return { ...base, [key]: value }
     })
@@ -53,13 +59,15 @@ export default function SettingsPage() {
       firstReminderMinutes !== reminderSettings.firstReminderMinutesBefore ||
       finalReminderMinutes !== reminderSettings.finalReminderMinutesBefore ||
       noShowThresholdMinutes !== automationSettings.noShowThresholdMinutes ||
-      waitlistResponseMinutes !== automationSettings.waitlistResponseMinutes
+      waitlistResponseMinutes !== automationSettings.waitlistResponseMinutes ||
+      preferredChannel !== automationSettings.preferredChannel
     )
   }, [
     firstReminderMinutes,
     finalReminderMinutes,
     noShowThresholdMinutes,
     waitlistResponseMinutes,
+    preferredChannel,
     reminderSettings,
     automationSettings
   ])
@@ -94,7 +102,7 @@ export default function SettingsPage() {
     updateAutomationSettings({
       noShowThresholdMinutes,
       waitlistResponseMinutes,
-      preferredChannel: automationSettings.preferredChannel
+      preferredChannel
     })
 
     setDraft(null)
@@ -110,7 +118,7 @@ export default function SettingsPage() {
           Instellingen
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Optimaliseer hoe TableBack automatisch lege tafels voorkomt via WhatsApp.
+          Optimaliseer hoe TableBack automatisch lege tafels voorkomt via WhatsApp en SMS.
         </p>
       </div>
 
@@ -132,7 +140,7 @@ export default function SettingsPage() {
   <div className="bg-white rounded-2xl border border-gray-100 p-6 space-y-6 shadow-sm">
     <div>
       <h2 className="text-lg font-semibold text-[#1f3d2b]">
-        Herinneringen via WhatsApp
+        Herinneringen
       </h2>
       <p className="text-sm text-gray-500 mt-1">
         Slim getimede herinneringen verminderen no-shows drastisch. Stel een eerste herinnering en een laatste herinnering in.
@@ -205,6 +213,23 @@ export default function SettingsPage() {
           onChange={e => updateDraft("waitlistResponseMinutes", Number(e.target.value))}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#d87a3b]"
         />
+      </label>
+
+      <label className="space-y-2 block">
+        <span className="text-sm font-medium text-[#1f3d2b]">
+          Voorkeurskanaal
+        </span>
+        <select
+          value={preferredChannel}
+          onChange={e =>
+            updateDraft("preferredChannel", e.target.value as ContactChannel)
+          }
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#d87a3b]"
+        >
+          <option value="whatsapp">WhatsApp</option>
+          <option value="sms">SMS</option>
+          <option value="both">WhatsApp + SMS</option>
+        </select>
       </label>
     </div>
   </div>

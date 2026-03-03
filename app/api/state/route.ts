@@ -21,6 +21,7 @@ type PersistedAppState = {
 type ReservationRow = {
   id: string
   user_id: string
+  restaurant_id?: string | null
   name: string
   phone: string | null
   time: string
@@ -37,6 +38,7 @@ type ReservationRow = {
 type WaitlistRow = {
   id: string
   user_id: string
+  restaurant_id?: string | null
   name: string
   phone: string
   party_size: number
@@ -48,11 +50,12 @@ type WaitlistRow = {
 type SettingsRow = {
   id?: number
   user_id: string
+  restaurant_id?: string | null
   first_reminder_minutes_before: number | null
   final_reminder_minutes_before: number | null
   no_show_threshold_minutes: number | null
   waitlist_response_minutes: number | null
-  preferred_channel: "whatsapp" | "sms" | "email" | null
+  preferred_channel: "whatsapp" | "sms" | "both" | "email" | null
 }
 
 function ensureUuidId(value: unknown): string {
@@ -121,6 +124,7 @@ function waitlistToRow(entry: WaitlistEntry, userId: string): WaitlistRow {
   return {
     id: entry.id,
     user_id: userId,
+    restaurant_id: null,
     name: entry.name,
     phone: entry.phone,
     party_size: entry.partySize,
@@ -132,24 +136,46 @@ function waitlistToRow(entry: WaitlistEntry, userId: string): WaitlistRow {
   }
 }
 
+async function getRestaurantIdForUser(userId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("restaurants")
+    .select("id")
+    .eq("owner_user_id", userId)
+    .maybeSingle()
+  if (error || !data?.id) return null
+  return data.id as string
+}
+
 export async function GET(request: Request) {
   const user = getSessionUserFromCookieHeader(request.headers.get("cookie") ?? "")
   if (!user) {
     return NextResponse.json({ ok: false, error: "Niet ingelogd." }, { status: 401 })
   }
 
+  const restaurantId = await getRestaurantIdForUser(user.id)
+  if (!restaurantId) {
+    return NextResponse.json(
+      { ok: false, error: "Geen restaurant gekoppeld aan deze gebruiker." },
+      { status: 400 }
+    )
+  }
+
   const [reservationsResult, waitlistResult, settingsResult] = await Promise.all([
     supabaseAdmin
       .from("reservations")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("restaurant_id", restaurantId)
       .order("created_at", { ascending: true }),
     supabaseAdmin
       .from("waitlist")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("restaurant_id", restaurantId)
       .order("created_at", { ascending: true }),
-    supabaseAdmin.from("settings").select("*").eq("user_id", user.id).maybeSingle()
+    supabaseAdmin
+      .from("settings")
+      .select("*")
+      .eq("restaurant_id", restaurantId)
+      .maybeSingle()
   ])
 
   if (reservationsResult.error || waitlistResult.error || settingsResult.error) {
@@ -170,6 +196,7 @@ export async function GET(request: Request) {
   const preferredChannel =
     settings?.preferred_channel === "whatsapp" ||
     settings?.preferred_channel === "sms" ||
+    settings?.preferred_channel === "both" ||
     settings?.preferred_channel === "email"
       ? settings.preferred_channel
       : DEFAULT_AUTOMATION_SETTINGS.preferredChannel
@@ -207,6 +234,14 @@ export async function PUT(request: Request) {
     return NextResponse.json({ ok: false, error: "Niet ingelogd." }, { status: 401 })
   }
 
+  const restaurantId = await getRestaurantIdForUser(user.id)
+  if (!restaurantId) {
+    return NextResponse.json(
+      { ok: false, error: "Geen restaurant gekoppeld aan deze gebruiker." },
+      { status: 400 }
+    )
+  }
+
   let body: Partial<PersistedAppState>
   try {
     body = (await request.json()) as Partial<PersistedAppState>
@@ -223,10 +258,16 @@ export async function PUT(request: Request) {
   const automationSettings = body.automationSettings ?? DEFAULT_AUTOMATION_SETTINGS
 
   const reservationRows = reservations.map(entry =>
-    reservationToRow({ ...entry, id: ensureUuidId(entry.id) }, user.id)
+    ({
+      ...reservationToRow({ ...entry, id: ensureUuidId(entry.id) }, user.id),
+      restaurant_id: restaurantId
+    })
   )
   const waitlistRows = waitlist.map(entry =>
-    waitlistToRow({ ...entry, id: ensureUuidId(entry.id) }, user.id)
+    ({
+      ...waitlistToRow({ ...entry, id: ensureUuidId(entry.id) }, user.id),
+      restaurant_id: restaurantId
+    })
   )
 
   if (reservationRows.length > 0) {
@@ -239,7 +280,10 @@ export async function PUT(request: Request) {
   }
 
   const { data: existingReservations, error: reservationIdsError } =
-    await supabaseAdmin.from("reservations").select("id").eq("user_id", user.id)
+    await supabaseAdmin
+      .from("reservations")
+      .select("id")
+      .eq("restaurant_id", restaurantId)
   if (reservationIdsError) {
     return NextResponse.json(
       { ok: false, error: reservationIdsError.message },
@@ -256,7 +300,7 @@ export async function PUT(request: Request) {
     const { error } = await supabaseAdmin
       .from("reservations")
       .delete()
-      .eq("user_id", user.id)
+      .eq("restaurant_id", restaurantId)
       .in("id", staleReservationIds)
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
@@ -273,7 +317,10 @@ export async function PUT(request: Request) {
   }
 
   const { data: existingWaitlist, error: waitlistIdsError } =
-    await supabaseAdmin.from("waitlist").select("id").eq("user_id", user.id)
+    await supabaseAdmin
+      .from("waitlist")
+      .select("id")
+      .eq("restaurant_id", restaurantId)
   if (waitlistIdsError) {
     return NextResponse.json({ ok: false, error: waitlistIdsError.message }, { status: 500 })
   }
@@ -287,7 +334,7 @@ export async function PUT(request: Request) {
     const { error } = await supabaseAdmin
       .from("waitlist")
       .delete()
-      .eq("user_id", user.id)
+      .eq("restaurant_id", restaurantId)
       .in("id", staleWaitlistIds)
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
@@ -296,6 +343,7 @@ export async function PUT(request: Request) {
 
   const settingsPayload: SettingsRow = {
     user_id: user.id,
+    restaurant_id: restaurantId,
     first_reminder_minutes_before: reminderSettings.firstReminderMinutesBefore,
     final_reminder_minutes_before: reminderSettings.finalReminderMinutesBefore,
     no_show_threshold_minutes: automationSettings.noShowThresholdMinutes,
@@ -306,7 +354,7 @@ export async function PUT(request: Request) {
   const { data: existingSettings, error: settingsSelectError } = await supabaseAdmin
     .from("settings")
     .select("id")
-    .eq("user_id", user.id)
+    .eq("restaurant_id", restaurantId)
     .order("id", { ascending: false })
     .limit(1)
   if (settingsSelectError) {

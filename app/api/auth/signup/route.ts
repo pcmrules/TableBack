@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { createSession, createUser, SESSION_COOKIE_NAME } from "@/lib/server/auth"
 import { consumeRateLimit, getClientIp } from "@/lib/server/rateLimit"
+import { supabaseAdmin } from "@/lib/server/supabaseAdmin"
 
 type SignupPayload = {
   name: string
@@ -65,6 +66,30 @@ export async function POST(request: Request) {
 
   if ("error" in result) {
     return NextResponse.json({ ok: false, error: result.error }, { status: 400 })
+  }
+
+  const restaurantName = (body.name ?? "").trim()
+  const { error: restaurantError } = await supabaseAdmin.from("restaurants").insert([
+    {
+      owner_user_id: result.user.id,
+      name: restaurantName || "Nieuw restaurant",
+      contact_email: result.user.email
+    }
+  ])
+
+  if (restaurantError) {
+    await supabaseAdmin.auth.admin.deleteUser(result.user.id)
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          restaurantError.message.includes("relation") ||
+          restaurantError.message.includes("does not exist")
+            ? "Tabel 'restaurants' ontbreekt in Supabase."
+            : `Restaurant koppelen mislukt: ${restaurantError.message}`
+      },
+      { status: 500 }
+    )
   }
 
   const token = await createSession(result.user.id)

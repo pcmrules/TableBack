@@ -1,7 +1,5 @@
 "use client"
 
-import { supabase } from "@/lib/supabaseClient"
-
 import {
   createContext,
   useContext,
@@ -26,83 +24,11 @@ import {
   type ReminderSettings
 } from "@/lib/shared/settings"
 
-type ReservationRow = {
-  id: string
-  user_id: string | null
-  name: string
-  phone: string | null
-  time: string
-  created_at: string | null
-  party_size: number
-  status: Reservation["status"]
-  filled_from_waitlist: boolean | null
-  original_guest_name: string | null
-  estimated_revenue: number
-  reminder_count: number | null
-  last_reminder_at: string | null
-}
-
-type WaitlistRow = {
-  id: string
-  user_id: string | null
-  name: string
-  phone: string
-  party_size: number
-  status: "waiting" | "contacted" | "declined" | null
-  created_at: string | null
-  last_contacted_at: string | null
-}
-
-type SettingsRow = {
-  id?: number
-  user_id: string | null
-  first_reminder_minutes_before: number | null
-  final_reminder_minutes_before: number | null
-  no_show_threshold_minutes: number | null
-  waitlist_response_minutes: number | null
-  preferred_channel: ContactChannel | null
-}
-
-function parseDatabaseTimestamp(value: string | null): number | undefined {
-  if (!value) return undefined
-
-  const hasTimezone = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(value)
-  const normalized = value.includes(" ") ? value.replace(" ", "T") : value
-  const candidate = hasTimezone ? normalized : `${normalized}Z`
-  const parsed = Date.parse(candidate)
-  return Number.isFinite(parsed) ? parsed : undefined
-}
-
-function reservationFromRow(row: ReservationRow): Reservation {
-  return normalizeReservation({
-    id: row.id,
-    name: row.name,
-    phone: row.phone ?? "",
-    time: row.time,
-    createdAt: parseDatabaseTimestamp(row.created_at) ?? Date.now(),
-    partySize: row.party_size,
-    status: row.status,
-    filledFromWaitlist: Boolean(row.filled_from_waitlist),
-    originalGuestName: row.original_guest_name ?? undefined,
-    estimatedRevenue: row.estimated_revenue,
-    reminderCount: typeof row.reminder_count === "number" ? row.reminder_count : 0,
-    lastReminderAt: parseDatabaseTimestamp(row.last_reminder_at)
-  })
-}
-
-function waitlistFromRow(row: WaitlistRow): WaitlistEntry {
-  return normalizeWaitlistEntry(
-    {
-      id: row.id,
-      name: row.name,
-      phone: row.phone,
-      partySize: row.party_size,
-      status: row.status ?? "waiting",
-      createdAt: parseDatabaseTimestamp(row.created_at),
-      lastContactedAt: parseDatabaseTimestamp(row.last_contacted_at)
-    },
-    Date.now()
-  )
+type PersistedAppState = {
+  reservations: Reservation[]
+  waitlist: WaitlistEntry[]
+  reminderSettings: ReminderSettings
+  automationSettings: AutomationSettings
 }
 
 function normalizeWaitlistEntry(
@@ -191,29 +117,77 @@ function getReservationTimestampInBrussels(
   )
 }
 
+function formatBrusselsDate(referenceTimestamp: number): string {
+  const parts = getBrusselsNowParts(referenceTimestamp)
+  const day = String(parts.day).padStart(2, "0")
+  const month = String(parts.month).padStart(2, "0")
+  return `${day}/${month}/${parts.year}`
+}
+
 function formatChannelLabel(channel: ContactChannel): string {
   if (channel === "whatsapp") return "WhatsApp"
   if (channel === "sms") return "SMS"
+  if (channel === "both") return "WhatsApp + SMS"
   return "E-mail"
+}
+
+function isWhatsAppChannel(channel: ContactChannel): boolean {
+  return channel === "whatsapp" || channel === "both"
+}
+
+function isSmsChannel(channel: ContactChannel): boolean {
+  return channel === "sms" || channel === "both"
 }
 
 async function sendWhatsAppMessage(
   to: string,
   message: string,
   conversationType: "reservation_confirmation" | "waitlist_offer",
-  offerExpiresAt?: number
+  offerExpiresAt?: number,
+  templateKey?:
+    | "reminder_first"
+    | "reminder_final"
+    | "confirmation"
+    | "cancellation"
+    | "waitlist_offer",
+  templateVariables?: Record<string, string | number | boolean>
 ): Promise<void> {
   const response = await fetch("/api/whatsapp/send", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ to, message, conversationType, offerExpiresAt })
+    body: JSON.stringify({
+      to,
+      message,
+      conversationType,
+      offerExpiresAt,
+      templateKey,
+      templateVariables
+    })
   })
 
   if (!response.ok) {
     const payload = (await response.json()) as { error?: string }
     throw new Error(payload.error ?? "WhatsApp verzending mislukt.")
+  }
+}
+
+async function sendSmsMessage(
+  to: string,
+  message: string
+): Promise<void> {
+  const response = await fetch("/api/sms/send", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ to, message })
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json()) as { error?: string }
+    throw new Error(payload.error ?? "SMS verzending mislukt.")
   }
 }
 
@@ -290,6 +264,8 @@ export function ReservationProvider({
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([])
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [currentRestaurantId, setCurrentRestaurantId] = useState<string | null>(null)
+  const [currentRestaurantName, setCurrentRestaurantName] = useState<string>("Restaurant")
   const [isAuthResolved, setIsAuthResolved] = useState(false)
 
   const [toast, setToast] =
@@ -332,6 +308,8 @@ export function ReservationProvider({
 
         if (!response.ok) {
           setCurrentUserId(null)
+          setCurrentRestaurantId(null)
+          setCurrentRestaurantName("Restaurant")
           setIsAuthResolved(true)
           return
         }
@@ -339,11 +317,22 @@ export function ReservationProvider({
         const payload = (await response.json()) as {
           ok?: boolean
           user?: { id?: string }
+          restaurant?: { id?: string; name?: string } | null
         }
         setCurrentUserId(payload.ok && payload.user?.id ? payload.user.id : null)
+        setCurrentRestaurantId(
+          payload.ok && payload.restaurant?.id ? payload.restaurant.id : null
+        )
+        setCurrentRestaurantName(
+          payload.ok && payload.restaurant?.name?.trim()
+            ? payload.restaurant.name.trim()
+            : "Restaurant"
+        )
       } catch {
         if (!active) return
         setCurrentUserId(null)
+        setCurrentRestaurantId(null)
+        setCurrentRestaurantName("Restaurant")
       } finally {
         if (active) setIsAuthResolved(true)
       }
@@ -354,129 +343,49 @@ export function ReservationProvider({
     }
   }, [])
 
-  const fetchReservationsFromDatabase = useCallback(async (): Promise<
-    Reservation[]
-  > => {
-    if (!currentUserId) return []
-
-    const { data, error } = await supabase
-      .from("reservations")
-      .select("*")
-      .eq("user_id", currentUserId)
-      .order("created_at", { ascending: true })
-
-    if (error) {
-      console.error("Supabase reservations fetch error:", error)
-      return []
-    }
-
-    const rows = (data ?? []) as unknown as ReservationRow[]
-    return rows.map(reservationFromRow)
-  }, [currentUserId])
-
-  const fetchWaitlistFromDatabase = useCallback(async (): Promise<
-    WaitlistEntry[]
-  > => {
-    if (!currentUserId) return []
-
-    const { data, error } = await supabase
-      .from("waitlist")
-      .select("*")
-      .eq("user_id", currentUserId)
-      .order("created_at", { ascending: true })
-
-    if (error) {
-      console.error("Supabase waitlist fetch error:", error)
-      return []
-    }
-
-    const rows = (data ?? []) as unknown as WaitlistRow[]
-    return rows.map(waitlistFromRow)
-  }, [currentUserId])
-
-  const fetchSettingsFromDatabase = useCallback(async (): Promise<{
-    reminder: ReminderSettings
-    automation: AutomationSettings
-  }> => {
-    if (!currentUserId) {
-      return {
-        reminder: DEFAULT_REMINDER_SETTINGS,
-        automation: DEFAULT_AUTOMATION_SETTINGS
-      }
-    }
-
-    const { data, error } = await supabase
-      .from("settings")
-      .select("*")
-      .eq("user_id", currentUserId)
-      .maybeSingle()
-
-    if (error) {
-      console.error("Supabase settings fetch error:", error)
-      return {
-        reminder: DEFAULT_REMINDER_SETTINGS,
-        automation: DEFAULT_AUTOMATION_SETTINGS
-      }
-    }
-
-    if (!data) {
-      return {
-        reminder: DEFAULT_REMINDER_SETTINGS,
-        automation: DEFAULT_AUTOMATION_SETTINGS
-      }
-    }
-
-    const row = data as unknown as SettingsRow
-    const preferredChannel =
-      row.preferred_channel === "whatsapp" ||
-      row.preferred_channel === "sms" ||
-      row.preferred_channel === "email"
-        ? row.preferred_channel
-        : DEFAULT_AUTOMATION_SETTINGS.preferredChannel
-
-    return {
-      reminder: {
-        firstReminderMinutesBefore:
-          row.first_reminder_minutes_before ??
-          DEFAULT_REMINDER_SETTINGS.firstReminderMinutesBefore,
-        finalReminderMinutesBefore:
-          row.final_reminder_minutes_before ??
-          DEFAULT_REMINDER_SETTINGS.finalReminderMinutesBefore
-      },
-      automation: {
-        noShowThresholdMinutes:
-          row.no_show_threshold_minutes ??
-          DEFAULT_AUTOMATION_SETTINGS.noShowThresholdMinutes,
-        waitlistResponseMinutes:
-          row.waitlist_response_minutes ??
-          DEFAULT_AUTOMATION_SETTINGS.waitlistResponseMinutes,
-        preferredChannel
-      }
-    }
-  }, [currentUserId])
-
   const reloadFromDatabase = useCallback(async (): Promise<void> => {
-    const [nextReservations, nextWaitlist, settings] = await Promise.all([
-      fetchReservationsFromDatabase(),
-      fetchWaitlistFromDatabase(),
-      fetchSettingsFromDatabase()
-    ])
+    if (!currentUserId || !currentRestaurantId) return
+
+    const response = await fetch("/api/state", { cache: "no-store" })
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string }
+      console.error(
+        "State fetch error:",
+        payload.error ?? "Kon serverstate niet laden."
+      )
+      return
+    }
+
+    const payload = (await response.json()) as {
+      ok?: boolean
+      state?: Partial<PersistedAppState>
+    }
+    if (!payload.ok || !payload.state) return
+
+    const nextReservations = Array.isArray(payload.state.reservations)
+      ? payload.state.reservations.map(normalizeReservation)
+      : []
+    const nextWaitlist = Array.isArray(payload.state.waitlist)
+      ? payload.state.waitlist.map(entry =>
+          normalizeWaitlistEntry(entry, Date.now())
+        )
+      : []
+    const nextReminderSettings =
+      payload.state.reminderSettings ?? DEFAULT_REMINDER_SETTINGS
+    const nextAutomationSettings =
+      payload.state.automationSettings ?? DEFAULT_AUTOMATION_SETTINGS
 
     setReservations(nextReservations)
     setWaitlist(nextWaitlist)
-    setReminderSettings(settings.reminder)
-    setAutomationSettings(settings.automation)
+    setReminderSettings(nextReminderSettings)
+    setAutomationSettings(nextAutomationSettings)
     lastSyncedSignature.current = buildSnapshotSignature({
       reservations: nextReservations,
       waitlist: nextWaitlist,
-      reminderSettings: settings.reminder,
-      automationSettings: settings.automation
+      reminderSettings: nextReminderSettings,
+      automationSettings: nextAutomationSettings
     })
-  }, [
-    fetchReservationsFromDatabase,
-    fetchSettingsFromDatabase,
-    fetchWaitlistFromDatabase
-  ])
+  }, [currentRestaurantId, currentUserId])
 
   const syncSnapshotToDatabase = useCallback(async (snapshot: {
     reservations: Reservation[]
@@ -551,7 +460,14 @@ export function ReservationProvider({
         }
       >()
 
-      const toSend: Array<{ name: string; phone: string; text: string }> = []
+      const nowDate = formatBrusselsDate(now)
+      const toSend: Array<{
+        name: string
+        phone: string
+        text: string
+        templateKey: "reminder_first" | "reminder_final"
+        templateVariables: Record<string, string | number | boolean>
+      }> = []
       const toToast: string[] = []
 
       for (const reservation of currentReservations) {
@@ -587,11 +503,22 @@ export function ReservationProvider({
           if (!sentReminderEvents.current.has(reminderKey)) {
             sentReminderEvents.current.add(reminderKey)
             toToast.push(`Laatste herinnering verstuurd naar ${reservation.name}`)
-            if (automationSettings.preferredChannel === "whatsapp" && reservation.phone.trim()) {
+            if (
+              (isWhatsAppChannel(automationSettings.preferredChannel) ||
+                isSmsChannel(automationSettings.preferredChannel)) &&
+              reservation.phone.trim()
+            ) {
               toSend.push({
                 name: reservation.name,
                 phone: reservation.phone,
-                text: `Laatste herinnering: bevestig je reservatie om ${reservation.time}. Antwoord met JA om te bevestigen of NEE om te annuleren.`
+                text: `Laatste herinnering: bevestig je reservatie om ${reservation.time}. Antwoord met JA om te bevestigen of NEE om te annuleren.`,
+                templateKey: "reminder_final",
+                templateVariables: {
+                  "1": reservation.name,
+                  "2": currentRestaurantName,
+                  "3": nowDate,
+                  "4": reservation.time
+                }
               })
             }
           }
@@ -604,11 +531,22 @@ export function ReservationProvider({
           if (!sentReminderEvents.current.has(reminderKey)) {
             sentReminderEvents.current.add(reminderKey)
             toToast.push(`Eerste herinnering verstuurd naar ${reservation.name}`)
-            if (automationSettings.preferredChannel === "whatsapp" && reservation.phone.trim()) {
+            if (
+              (isWhatsAppChannel(automationSettings.preferredChannel) ||
+                isSmsChannel(automationSettings.preferredChannel)) &&
+              reservation.phone.trim()
+            ) {
               toSend.push({
                 name: reservation.name,
                 phone: reservation.phone,
-                text: `Dag ${reservation.name}, bevestig je reservatie om ${reservation.time} voor ${reservation.partySize} personen. Antwoord met JA om te bevestigen of NEE om te annuleren.`
+                text: `Dag ${reservation.name}, bevestig je reservatie om ${reservation.time} voor ${reservation.partySize} personen. Antwoord met JA om te bevestigen of NEE om te annuleren.`,
+                templateKey: "reminder_first",
+                templateVariables: {
+                  "1": reservation.name,
+                  "2": currentRestaurantName,
+                  "3": nowDate,
+                  "4": reservation.time
+                }
               })
             }
           }
@@ -662,16 +600,29 @@ export function ReservationProvider({
       }
 
       for (const outbound of toSend) {
-        void sendWhatsAppMessage(
-          outbound.phone,
-          outbound.text,
-          "reservation_confirmation"
-        ).catch(error => {
-          setToast({
-            message: `WhatsApp fout: ${error.message}`,
-            id: Date.now()
+        if (isWhatsAppChannel(automationSettings.preferredChannel)) {
+          void sendWhatsAppMessage(
+            outbound.phone,
+            outbound.text,
+            "reservation_confirmation",
+            undefined,
+            outbound.templateKey,
+            outbound.templateVariables
+          ).catch(error => {
+            setToast({
+              message: `WhatsApp fout: ${error.message}`,
+              id: Date.now()
+            })
           })
-        })
+        }
+        if (isSmsChannel(automationSettings.preferredChannel)) {
+          void sendSmsMessage(outbound.phone, outbound.text).catch(error => {
+            setToast({
+              message: `SMS fout: ${error.message}`,
+              id: Date.now()
+            })
+          })
+        }
       }
     }, 5000)
 
@@ -680,7 +631,8 @@ export function ReservationProvider({
     reminderSettings.firstReminderMinutesBefore,
     reminderSettings.finalReminderMinutesBefore,
     automationSettings.noShowThresholdMinutes,
-    automationSettings.preferredChannel
+    automationSettings.preferredChannel,
+    currentRestaurantName
   ])
 
   useEffect(() => {
@@ -691,6 +643,7 @@ export function ReservationProvider({
           reservation.reminderCount > 0 &&
           reservation.phone.trim().length > 0
       )
+      if (!isWhatsAppChannel(automationSettings.preferredChannel)) return
 
       void (async () => {
         const confirmedIds = new Set<string>()
@@ -752,7 +705,7 @@ export function ReservationProvider({
     }, 6000)
 
     return () => clearInterval(interval)
-  }, [])
+  }, [automationSettings.preferredChannel])
 
   useEffect(() => {
     if (!isHydratedFromServer) return
@@ -938,6 +891,8 @@ export function ReservationProvider({
   function markWaitlistContacted(id: string) {
     const entry = waitlist.find(item => item.id === id)
     if (!entry) return
+    const whatsappEnabled = isWhatsAppChannel(automationSettings.preferredChannel)
+    const smsEnabled = isSmsChannel(automationSettings.preferredChannel)
 
     const candidateReservation = reservations
       .filter(
@@ -951,6 +906,38 @@ export function ReservationProvider({
     if (!candidateReservation) {
       setToast({
         message: `Geen open tafel beschikbaar voor ${entry.partySize} personen`,
+        id: Date.now()
+      })
+      return
+    }
+
+    if (!whatsappEnabled) {
+      setWaitlist(prev =>
+        prev.map(waitlistEntry =>
+          waitlistEntry.id === id
+            ? {
+                ...waitlistEntry,
+                status: "contacted",
+                lastContactedAt: Date.now()
+              }
+            : waitlistEntry
+        )
+      )
+
+      if (smsEnabled && entry.phone.trim()) {
+        void sendSmsMessage(
+          entry.phone,
+          `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Gelieve ons te bellen om te bevestigen.`
+        ).catch(error => {
+          setToast({
+            message: `SMS fout: ${error.message}`,
+            id: Date.now()
+          })
+        })
+      }
+
+      setToast({
+        message: `${entry.name} gecontacteerd via ${formatChannelLabel(automationSettings.preferredChannel)} (manuele opvolging)`,
         id: Date.now()
       })
       return
@@ -1031,12 +1018,19 @@ export function ReservationProvider({
       id: Date.now()
     })
 
-    if (automationSettings.preferredChannel === "whatsapp" && entry.phone.trim()) {
+    if (entry.phone.trim()) {
       void sendWhatsAppMessage(
         entry.phone,
         `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Antwoord met JA om te bevestigen of NEE om over te slaan.`,
         "waitlist_offer",
-        offerExpiresAt
+        offerExpiresAt,
+        "waitlist_offer",
+        {
+          "1": entry.name,
+          "2": currentRestaurantName,
+          "3": formatBrusselsDate(Date.now()),
+          "4": candidateReservation.time
+        }
       ).catch(error => {
         const timeoutForManual = fillTimeouts.current.get(candidateReservation.id)
         if (timeoutForManual) {
@@ -1070,10 +1064,24 @@ export function ReservationProvider({
         })
       })
     }
+    if (smsEnabled && entry.phone.trim()) {
+      void sendSmsMessage(
+        entry.phone,
+        `Hallo ${entry.name}, er is mogelijk een tafel beschikbaar voor ${entry.partySize} personen. Antwoord met JA om te bevestigen of NEE om over te slaan.`
+      ).catch(error => {
+        setToast({
+          message: `SMS fout: ${error.message}`,
+          id: Date.now()
+        })
+      })
+    }
   }
 
   // MATCHING ENGINE
   useEffect(() => {
+    if (!isWhatsAppChannel(automationSettings.preferredChannel)) return
+    const smsEnabled = isSmsChannel(automationSettings.preferredChannel)
+
     const expiredReservation = reservations.find(
       r =>
         r.status === "expired" &&
@@ -1136,12 +1144,19 @@ export function ReservationProvider({
       Math.max(automationSettings.waitlistResponseMinutes, 1) * 60000
     const offerExpiresAt = Date.now() + responseTimeoutMs
 
-    if (automationSettings.preferredChannel === "whatsapp" && match.phone.trim()) {
+    if (match.phone.trim()) {
       void sendWhatsAppMessage(
         match.phone,
         `Er is nu een tafel vrijgekomen voor ${match.partySize} personen. Antwoord met JA om deze te nemen of NEE om over te slaan.`,
         "waitlist_offer",
-        offerExpiresAt
+        offerExpiresAt,
+        "waitlist_offer",
+        {
+          "1": match.name,
+          "2": currentRestaurantName,
+          "3": formatBrusselsDate(Date.now()),
+          "4": expiredReservation.time
+        }
       ).catch(error => {
         const timeout = fillTimeouts.current.get(expiredReservation.id)
         if (timeout) {
@@ -1170,6 +1185,17 @@ export function ReservationProvider({
         pendingFallbackStatuses.current.delete(expiredReservation.id)
         setToast({
           message: `WhatsApp fout: ${error.message}`,
+          id: Date.now()
+        })
+      })
+    }
+    if (smsEnabled && match.phone.trim()) {
+      void sendSmsMessage(
+        match.phone,
+        `Er is nu een tafel vrijgekomen voor ${match.partySize} personen. Antwoord met JA om deze te nemen of NEE om over te slaan.`
+      ).catch(error => {
+        setToast({
+          message: `SMS fout: ${error.message}`,
           id: Date.now()
         })
       })
@@ -1213,7 +1239,7 @@ export function ReservationProvider({
     }, responseTimeoutMs)
 
     fillTimeouts.current.set(expiredReservation.id, timeout)
-  }, [reservations, waitlist, automationSettings])
+  }, [reservations, waitlist, automationSettings, currentRestaurantName])
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -1300,55 +1326,23 @@ export function ReservationProvider({
   }, [waitlist])
 
   useEffect(() => {
-    if (!currentUserId) return
+    if (!currentUserId || !currentRestaurantId) return
 
-    let reloadTimeout: ReturnType<typeof setTimeout> | null = null
-    const scheduleReload = () => {
-      if (reloadTimeout) clearTimeout(reloadTimeout)
-      reloadTimeout = setTimeout(() => {
-        void reloadFromDatabase()
-      }, 150)
+    const interval = setInterval(() => {
+      if (document.visibilityState !== "visible") return
+      void reloadFromDatabase()
+    }, 4000)
+
+    const onFocus = () => {
+      void reloadFromDatabase()
     }
-
-    const channel = supabase
-      .channel(`tableback-sync-${currentUserId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "reservations",
-          filter: `user_id=eq.${currentUserId}`
-        },
-        scheduleReload
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "waitlist",
-          filter: `user_id=eq.${currentUserId}`
-        },
-        scheduleReload
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "settings",
-          filter: `user_id=eq.${currentUserId}`
-        },
-        scheduleReload
-      )
-      .subscribe()
+    window.addEventListener("focus", onFocus)
 
     return () => {
-      if (reloadTimeout) clearTimeout(reloadTimeout)
-      void supabase.removeChannel(channel)
+      clearInterval(interval)
+      window.removeEventListener("focus", onFocus)
     }
-  }, [currentUserId, reloadFromDatabase])
+  }, [currentRestaurantId, currentUserId, reloadFromDatabase])
 
   useEffect(() => {
     const timeouts = fillTimeouts.current

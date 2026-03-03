@@ -346,8 +346,9 @@ function formatWaitingTime(createdAt?: number): string {
   return `${hours}u ${minutes}m in wachtrij`
 }
 
-function channelLabel(channel: "whatsapp" | "sms" | "email") {
+function channelLabel(channel: "whatsapp" | "sms" | "both" | "email") {
   if (channel === "whatsapp") return "WhatsApp"
   if (channel === "sms") return "SMS"
+  if (channel === "both") return "WhatsApp + SMS"
   return "E-mail"
 }

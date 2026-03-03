@@ -3,7 +3,7 @@ export type ReminderSettings = {
   finalReminderMinutesBefore: number
 }
 
-export type ContactChannel = "whatsapp" | "sms" | "email"
+export type ContactChannel = "whatsapp" | "sms" | "both" | "email"
 
 export type AutomationSettings = {
   noShowThresholdMinutes: number

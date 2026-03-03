@@ -6,9 +6,16 @@ import type { WhatsAppConversationType } from "@/lib/whatsappState"
 
 type SendPayload = {
   to: string
-  message: string
+  message?: string
   conversationType?: WhatsAppConversationType
   offerExpiresAt?: number
+  templateKey?:
+    | "reminder_first"
+    | "reminder_final"
+    | "confirmation"
+    | "cancellation"
+    | "waitlist_offer"
+  templateVariables?: Record<string, string | number | boolean>
 }
 
 export async function POST(request: Request) {
@@ -29,6 +36,7 @@ export async function POST(request: Request) {
 
   const to = body.to?.trim()
   const message = body.message?.trim()
+  const templateKey = body.templateKey
   const conversationType =
     body.conversationType === "waitlist_offer"
       ? "waitlist_offer"
@@ -41,9 +49,9 @@ export async function POST(request: Request) {
       ? body.offerExpiresAt
       : null
 
-  if (!to || !message) {
+  if (!to || (!message && !templateKey)) {
     return NextResponse.json(
-      { ok: false, error: "to en message zijn verplicht." },
+      { ok: false, error: "to en message/templateKey zijn verplicht." },
       { status: 400 }
     )
   }
@@ -51,21 +59,33 @@ export async function POST(request: Request) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID
   const authToken = process.env.TWILIO_AUTH_TOKEN
   const from = process.env.TWILIO_WHATSAPP_FROM
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID
+  const statusCallbackUrl = process.env.TWILIO_STATUS_CALLBACK_URL
+  const templateSidByKey: Record<
+    NonNullable<SendPayload["templateKey"]>,
+    string | undefined
+  > = {
+    reminder_first: process.env.TWILIO_TEMPLATE_REMINDER_FIRST_SID,
+    reminder_final: process.env.TWILIO_TEMPLATE_REMINDER_FINAL_SID,
+    confirmation: process.env.TWILIO_TEMPLATE_CONFIRMATION_SID,
+    cancellation: process.env.TWILIO_TEMPLATE_CANCELLATION_SID,
+    waitlist_offer: process.env.TWILIO_TEMPLATE_WAITLIST_OFFER_SID
+  }
 
-  if (!accountSid || !authToken || !from) {
+  if (!accountSid || !authToken || (!from && !messagingServiceSid)) {
     return NextResponse.json(
       {
         ok: false,
         error:
-          "Twilio env ontbreekt. Zet TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN en TWILIO_WHATSAPP_FROM."
+          "Twilio env ontbreekt. Zet TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN en TWILIO_WHATSAPP_FROM of TWILIO_MESSAGING_SERVICE_SID."
       },
       { status: 500 }
     )
   }
 
   const normalizedTo = normalizePhone(to)
-  const normalizedFrom = normalizePhone(from)
-  if (!normalizedTo || !normalizedFrom) {
+  const normalizedFrom = from ? normalizePhone(from) : ""
+  if (!normalizedTo || (from && !normalizedFrom)) {
     return NextResponse.json(
       { ok: false, error: "Ongeldig telefoonnummer voor WhatsApp." },
       { status: 400 }
@@ -73,9 +93,36 @@ export async function POST(request: Request) {
   }
 
   const form = new URLSearchParams()
-  form.set("From", toWhatsAppAddress(normalizedFrom))
+  if (messagingServiceSid) {
+    form.set("MessagingServiceSid", messagingServiceSid)
+  } else {
+    form.set("From", toWhatsAppAddress(normalizedFrom))
+  }
   form.set("To", toWhatsAppAddress(normalizedTo))
-  form.set("Body", message)
+
+  if (templateKey) {
+    const templateSid = templateSidByKey[templateKey]
+    if (!templateSid) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Template SID ontbreekt voor ${templateKey}. Zet de juiste TWILIO_TEMPLATE_*_SID env variabele.`
+        },
+        { status: 500 }
+      )
+    }
+
+    form.set("ContentSid", templateSid)
+    if (body.templateVariables && Object.keys(body.templateVariables).length > 0) {
+      form.set("ContentVariables", JSON.stringify(body.templateVariables))
+    }
+  } else if (message) {
+    form.set("Body", message)
+  }
+
+  if (statusCallbackUrl?.trim()) {
+    form.set("StatusCallback", statusCallbackUrl.trim())
+  }
 
   setPhoneConfirmation(normalizedTo, {
     confirmed: false,

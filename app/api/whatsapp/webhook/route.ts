@@ -92,6 +92,64 @@ function buildSignatureUrls(request: Request): string[] {
   return [...urls]
 }
 
+async function sendTwilioTemplateMessage(params: {
+  to: string
+  contentSid: string
+  contentVariables?: Record<string, string | number | boolean>
+}) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID
+  const authToken = process.env.TWILIO_AUTH_TOKEN
+  const from = process.env.TWILIO_WHATSAPP_FROM
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID
+  const statusCallbackUrl = process.env.TWILIO_STATUS_CALLBACK_URL
+
+  if (!accountSid || !authToken || (!from && !messagingServiceSid)) {
+    return { ok: false as const, error: "Twilio sender-config ontbreekt." }
+  }
+
+  const form = new URLSearchParams()
+  if (messagingServiceSid) {
+    form.set("MessagingServiceSid", messagingServiceSid)
+  } else {
+    const normalizedFrom = normalizePhone(from ?? "")
+    if (!normalizedFrom) {
+      return { ok: false as const, error: "TWILIO_WHATSAPP_FROM is ongeldig." }
+    }
+    form.set("From", `whatsapp:${normalizedFrom}`)
+  }
+
+  form.set("To", `whatsapp:${params.to}`)
+  form.set("ContentSid", params.contentSid)
+  if (params.contentVariables && Object.keys(params.contentVariables).length > 0) {
+    form.set("ContentVariables", JSON.stringify(params.contentVariables))
+  }
+  if (statusCallbackUrl?.trim()) {
+    form.set("StatusCallback", statusCallbackUrl.trim())
+  }
+
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: form.toString()
+    }
+  )
+
+  if (response.ok) {
+    return { ok: true as const }
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as { message?: string }
+  return {
+    ok: false as const,
+    error: payload.message ?? "Twilio template verzending mislukt."
+  }
+}
+
 export async function POST(request: Request) {
   const twilioSignature = request.headers.get("x-twilio-signature")?.trim() ?? ""
   const authToken = process.env.TWILIO_AUTH_TOKEN
@@ -167,6 +225,20 @@ export async function POST(request: Request) {
     }
   }
 
+  let templateReplySent = false
+  if (from && currentConversationType !== "waitlist_offer" && (confirmed || declined)) {
+    const contentSid = confirmed
+      ? process.env.TWILIO_TEMPLATE_CONFIRMATION_SID
+      : process.env.TWILIO_TEMPLATE_CANCELLATION_SID
+    if (contentSid) {
+      const templateSend = await sendTwilioTemplateMessage({
+        to: from,
+        contentSid
+      })
+      templateReplySent = templateSend.ok
+    }
+  }
+
   const replyText =
     currentConversationType === "waitlist_offer"
       ? offerClosed || offerExpired
@@ -182,7 +254,9 @@ export async function POST(request: Request) {
           ? "Je annulering is ontvangen. Bedankt voor het laten weten."
           : "Dank je. Antwoord met JA om te bevestigen of NEE om te annuleren."
 
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(replyText)}</Message></Response>`
+  const xml = templateReplySent
+    ? `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`
+    : `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(replyText)}</Message></Response>`
 
   return new NextResponse(xml, {
     status: 200,

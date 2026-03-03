@@ -21,9 +21,25 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 
 TWILIO_ACCOUNT_SID=<sid>
 TWILIO_AUTH_TOKEN=<token>
-TWILIO_WHATSAPP_FROM=+14155238886
+TWILIO_WHATSAPP_FROM=+<jouw-goedgekeurde-whatsapp-afzender>
+TWILIO_SMS_FROM=+<jouw-sms-nummer>
+TWILIO_MESSAGING_SERVICE_SID=<optioneel-mgxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
+TWILIO_STATUS_CALLBACK_URL=https://<public-domain>/api/whatsapp/status
 TWILIO_WEBHOOK_URL=https://<public-domain>/api/whatsapp/webhook
+TWILIO_TEMPLATE_REMINDER_FIRST_SID=<optioneel-hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
+TWILIO_TEMPLATE_REMINDER_FINAL_SID=<optioneel-hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
+TWILIO_TEMPLATE_CONFIRMATION_SID=<optioneel-hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
+TWILIO_TEMPLATE_CANCELLATION_SID=<optioneel-hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
+TWILIO_TEMPLATE_WAITLIST_OFFER_SID=<optioneel-hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>
 ```
+
+Notes:
+
+- Gebruik in productie je eigen goedgekeurde WhatsApp sender; niet het Twilio sandbox nummer `+14155238886`.
+- Zet minimaal `TWILIO_WHATSAPP_FROM` of `TWILIO_MESSAGING_SERVICE_SID` (beide mag ook).
+- Voor pure SMS zonder Messaging Service: zet `TWILIO_SMS_FROM`.
+- Voor business/production WhatsApp zijn template-berichten nodig buiten het 24-uurs venster na laatste klantreactie.
+- Als je `TWILIO_TEMPLATE_*_SID` zet, verstuurt de app automatisch via `ContentSid` i.p.v. vrije tekst.
 
 ## Run Locally
 
