@@ -3,6 +3,7 @@ import Link from "next/link"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 import { getSessionUserFromCookies } from "@/lib/server/auth"
+import { getUserBillingState } from "@/lib/server/billing"
 import LogoutButton from "./logout-button"
 import { Providers } from "../providers"
 
@@ -14,6 +15,11 @@ export default async function AppLayout({
   const user = getSessionUserFromCookies(await cookies())
   if (!user) {
     redirect("/")
+  }
+
+  const billing = await getUserBillingState(user.id)
+  if (!billing || !billing.paid) {
+    redirect("/billing")
   }
 
   return (

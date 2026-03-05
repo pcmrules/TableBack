@@ -15,8 +15,13 @@ export default function HomePage() {
   useEffect(() => {
     void (async () => {
       const response = await fetch("/api/auth/session", { cache: "no-store" })
-      if (response.ok) {
-        router.replace("/dashboard")
+      if (!response.ok) return
+      const payload = (await response.json()) as {
+        ok?: boolean
+        billing?: { paid?: boolean }
+      }
+      if (payload.ok) {
+        router.replace(payload.billing?.paid ? "/dashboard" : "/billing")
       }
     })()
   }, [router])
@@ -39,7 +44,7 @@ export default function HomePage() {
         return
       }
 
-      router.push("/dashboard")
+      router.push("/billing")
       router.refresh()
     } catch {
       setError("Netwerkfout. Probeer opnieuw.")

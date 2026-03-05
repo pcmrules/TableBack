@@ -69,13 +69,36 @@ export async function POST(request: Request) {
   }
 
   const restaurantName = (body.name ?? "").trim()
-  const { error: restaurantError } = await supabaseAdmin.from("restaurants").insert([
+  let restaurantError: { message: string } | null = null
+
+  const primaryInsert = await supabaseAdmin.from("restaurants").insert([
     {
       owner_user_id: result.user.id,
       name: restaurantName || "Nieuw restaurant",
-      contact_email: result.user.email
+      contact_email: result.user.email,
+      billing_status: "pending"
     }
   ])
+
+  if (primaryInsert.error) {
+    const lower = primaryInsert.error.message.toLowerCase()
+    const isBillingColumnMissing =
+      lower.includes("billing_status") &&
+      (lower.includes("does not exist") || lower.includes("column"))
+
+    if (isBillingColumnMissing) {
+      const fallbackInsert = await supabaseAdmin.from("restaurants").insert([
+        {
+          owner_user_id: result.user.id,
+          name: restaurantName || "Nieuw restaurant",
+          contact_email: result.user.email
+        }
+      ])
+      restaurantError = fallbackInsert.error
+    } else {
+      restaurantError = primaryInsert.error
+    }
+  }
 
   if (restaurantError) {
     await supabaseAdmin.auth.admin.deleteUser(result.user.id)

@@ -62,7 +62,11 @@ function isPreferredChannelCompatError(errorMessage: string): boolean {
   const lower = errorMessage.toLowerCase()
   return (
     lower.includes("preferred_channel") &&
-    (lower.includes("enum") || lower.includes("invalid input value"))
+    (
+      lower.includes("enum") ||
+      lower.includes("invalid input value") ||
+      lower.includes("check constraint")
+    )
   )
 }
 

@@ -1,8 +1,17 @@
 "use client"
 
-import { FormEvent, useMemo, useState } from "react"
+import { FormEvent, useEffect, useMemo, useState } from "react"
 import { useReservations } from "@/context/ReservationContext"
 import type { ContactChannel } from "@/lib/shared/settings"
+
+type BillingInfo = {
+  status: string
+  paid: boolean
+  restaurantName: string
+  customerSince: string | null
+  nextPaymentAt: string | null
+  cancelAtPeriodEnd: boolean
+}
 
 export default function SettingsPage() {
   const {
@@ -22,6 +31,10 @@ export default function SettingsPage() {
 
   const [error, setError] = useState("")
   const [saved, setSaved] = useState(false)
+  const [billingInfo, setBillingInfo] = useState<BillingInfo | null>(null)
+  const [billingLoading, setBillingLoading] = useState(true)
+  const [billingError, setBillingError] = useState("")
+  const [billingActionBusy, setBillingActionBusy] = useState(false)
 
   const firstReminderMinutes =
     draft?.firstReminderMinutes ?? reminderSettings.firstReminderMinutesBefore
@@ -72,6 +85,36 @@ export default function SettingsPage() {
     automationSettings
   ])
 
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      setBillingLoading(true)
+      setBillingError("")
+      try {
+        const response = await fetch("/api/billing/status", { cache: "no-store" })
+        const payload = (await response.json()) as {
+          ok?: boolean
+          error?: string
+          billing?: BillingInfo
+        }
+        if (!active) return
+        if (!response.ok || !payload.ok || !payload.billing) {
+          setBillingError(payload.error ?? "Kon abonnement niet laden.")
+          return
+        }
+        setBillingInfo(payload.billing)
+      } catch {
+        if (!active) return
+        setBillingError("Netwerkfout bij laden van abonnement.")
+      } finally {
+        if (active) setBillingLoading(false)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSaved(false)
@@ -109,6 +152,73 @@ export default function SettingsPage() {
     setSaved(true)
 
     setTimeout(() => setSaved(false), 2500)
+  }
+
+  async function openBillingPortal() {
+    setBillingActionBusy(true)
+    setBillingError("")
+    try {
+      const response = await fetch("/api/billing/portal", { method: "POST" })
+      const payload = (await response.json()) as {
+        ok?: boolean
+        url?: string
+        error?: string
+      }
+      if (!response.ok || !payload.ok || !payload.url) {
+        setBillingError(payload.error ?? "Kon abonnementspagina niet openen.")
+        return
+      }
+      window.location.href = payload.url
+    } catch {
+      setBillingError("Netwerkfout bij openen van abonnementspagina.")
+    } finally {
+      setBillingActionBusy(false)
+    }
+  }
+
+  async function cancelSubscription() {
+    if (!window.confirm("Wil je je abonnement opzeggen aan het einde van de huidige periode?")) {
+      return
+    }
+
+    setBillingActionBusy(true)
+    setBillingError("")
+    try {
+      const response = await fetch("/api/billing/cancel", { method: "POST" })
+      const payload = (await response.json()) as {
+        ok?: boolean
+        error?: string
+        currentPeriodEnd?: string
+      }
+      if (!response.ok || !payload.ok) {
+        setBillingError(payload.error ?? "Opzeggen mislukt.")
+        return
+      }
+      setBillingInfo(prev =>
+        prev
+          ? {
+              ...prev,
+              cancelAtPeriodEnd: true,
+              nextPaymentAt: payload.currentPeriodEnd ?? prev.nextPaymentAt
+            }
+          : prev
+      )
+    } catch {
+      setBillingError("Netwerkfout bij opzeggen.")
+    } finally {
+      setBillingActionBusy(false)
+    }
+  }
+
+  function formatDate(value: string | null): string {
+    if (!value) return "Onbekend"
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return "Onbekend"
+    return date.toLocaleDateString("nl-BE", {
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    })
   }
 
   return (
@@ -248,6 +358,63 @@ export default function SettingsPage() {
     >
       Opslaan
     </button>
+  </div>
+
+  <div className="md:col-span-2 bg-white rounded-2xl border border-gray-100 p-6 space-y-4 shadow-sm">
+    <div>
+      <h2 className="text-lg font-semibold text-[#1f3d2b]">Abonnement</h2>
+      <p className="text-sm text-gray-500 mt-1">
+        Bekijk je huidige plan, volgende betaling en beheer je abonnement.
+      </p>
+    </div>
+
+    {billingLoading ? (
+      <p className="text-sm text-gray-500">Abonnement laden...</p>
+    ) : billingInfo ? (
+      <div className="space-y-2 text-sm text-gray-700">
+        <p>
+          <span className="font-medium text-[#1f3d2b]">Status:</span>{" "}
+          {billingInfo.cancelAtPeriodEnd
+            ? "Opgezegd (loopt af op einddatum)"
+            : billingInfo.status}
+        </p>
+        <p>
+          <span className="font-medium text-[#1f3d2b]">Klant sinds:</span>{" "}
+          {formatDate(billingInfo.customerSince)}
+        </p>
+        <p>
+          <span className="font-medium text-[#1f3d2b]">Volgende betaling:</span>{" "}
+          {formatDate(billingInfo.nextPaymentAt)}
+        </p>
+      </div>
+    ) : (
+      <p className="text-sm text-gray-500">Geen abonnementsdata gevonden.</p>
+    )}
+
+    {billingError ? (
+      <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        {billingError}
+      </p>
+    ) : null}
+
+    <div className="flex flex-wrap gap-3">
+      <button
+        type="button"
+        onClick={openBillingPortal}
+        disabled={billingActionBusy}
+        className="rounded-lg border border-[#1f3d2b] px-4 py-2 text-sm font-medium text-[#1f3d2b] hover:bg-[#f4f8f5] disabled:opacity-60"
+      >
+        Beheer mijn abonnement
+      </button>
+      <button
+        type="button"
+        onClick={cancelSubscription}
+        disabled={billingActionBusy || Boolean(billingInfo?.cancelAtPeriodEnd)}
+        className="rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+      >
+        {billingInfo?.cancelAtPeriodEnd ? "Opzegging ingepland" : "Abonnement opzeggen"}
+      </button>
+    </div>
   </div>
 
 </form>
