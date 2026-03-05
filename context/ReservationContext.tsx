@@ -31,6 +31,28 @@ type PersistedAppState = {
   automationSettings: AutomationSettings
 }
 
+const PREFERRED_CHANNEL_STORAGE_KEY = "tableback.preferredChannel"
+
+function isValidContactChannel(value: string): value is ContactChannel {
+  return (
+    value === "whatsapp" ||
+    value === "sms" ||
+    value === "both" ||
+    value === "email"
+  )
+}
+
+function getStoredPreferredChannel(): ContactChannel | null {
+  if (typeof window === "undefined") return null
+  const value = window.localStorage.getItem(PREFERRED_CHANNEL_STORAGE_KEY)
+  return value && isValidContactChannel(value) ? value : null
+}
+
+function storePreferredChannel(channel: ContactChannel) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(PREFERRED_CHANNEL_STORAGE_KEY, channel)
+}
+
 function normalizeWaitlistEntry(
   entry: WaitlistEntry,
   fallbackCreatedAt: number
@@ -318,6 +340,15 @@ export function ReservationProvider({
   }
 
   useEffect(() => {
+    const storedPreferredChannel = getStoredPreferredChannel()
+    if (!storedPreferredChannel) return
+    setAutomationSettings(prev => ({
+      ...prev,
+      preferredChannel: storedPreferredChannel
+    }))
+  }, [])
+
+  useEffect(() => {
     let active = true
 
     void (async () => {
@@ -393,11 +424,16 @@ export function ReservationProvider({
       payload.state.reminderSettings ?? DEFAULT_REMINDER_SETTINGS
     const nextAutomationSettings =
       payload.state.automationSettings ?? DEFAULT_AUTOMATION_SETTINGS
+    const storedPreferredChannel = getStoredPreferredChannel()
 
     setReservations(nextReservations)
     setWaitlist(nextWaitlist)
     setReminderSettings(nextReminderSettings)
-    setAutomationSettings(nextAutomationSettings)
+    setAutomationSettings({
+      ...nextAutomationSettings,
+      preferredChannel:
+        storedPreferredChannel ?? nextAutomationSettings.preferredChannel
+    })
     lastSyncedSignature.current = buildSnapshotSignature({
       reservations: nextReservations,
       waitlist: nextWaitlist,
@@ -865,6 +901,7 @@ export function ReservationProvider({
 
   function updateAutomationSettings(next: AutomationSettings) {
     setAutomationSettings(next)
+    storePreferredChannel(next.preferredChannel)
   }
 
   function addWaitlistEntry({ name, phone, partySize }: NewWaitlistEntry) {

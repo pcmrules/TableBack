@@ -58,6 +58,14 @@ type SettingsRow = {
   preferred_channel: "whatsapp" | "sms" | "both" | "email" | null
 }
 
+function isPreferredChannelCompatError(errorMessage: string): boolean {
+  const lower = errorMessage.toLowerCase()
+  return (
+    lower.includes("preferred_channel") &&
+    (lower.includes("enum") || lower.includes("invalid input value"))
+  )
+}
+
 function ensureUuidId(value: unknown): string {
   if (typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
     return value
@@ -374,11 +382,51 @@ export async function PUT(request: Request) {
       })
       .eq("id", existingSettings[0].id as number)
     if (error) {
+      if (isPreferredChannelCompatError(error.message)) {
+        const { error: fallbackError } = await supabaseAdmin
+          .from("settings")
+          .update({
+            first_reminder_minutes_before:
+              settingsPayload.first_reminder_minutes_before,
+            final_reminder_minutes_before: settingsPayload.final_reminder_minutes_before,
+            no_show_threshold_minutes: settingsPayload.no_show_threshold_minutes,
+            waitlist_response_minutes: settingsPayload.waitlist_response_minutes
+          })
+          .eq("id", existingSettings[0].id as number)
+        if (!fallbackError) {
+          return NextResponse.json({
+            ok: true,
+            warning:
+              "preferred_channel kon niet worden opgeslagen in de database (enum-compatibiliteit). Kanaalkeuze blijft lokaal bewaard."
+          })
+        }
+      }
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     }
   } else {
     const { error } = await supabaseAdmin.from("settings").insert([settingsPayload])
     if (error) {
+      if (isPreferredChannelCompatError(error.message)) {
+        const { error: fallbackError } = await supabaseAdmin.from("settings").insert([
+          {
+            user_id: settingsPayload.user_id,
+            restaurant_id: settingsPayload.restaurant_id,
+            first_reminder_minutes_before:
+              settingsPayload.first_reminder_minutes_before,
+            final_reminder_minutes_before:
+              settingsPayload.final_reminder_minutes_before,
+            no_show_threshold_minutes: settingsPayload.no_show_threshold_minutes,
+            waitlist_response_minutes: settingsPayload.waitlist_response_minutes
+          }
+        ])
+        if (!fallbackError) {
+          return NextResponse.json({
+            ok: true,
+            warning:
+              "preferred_channel kon niet worden opgeslagen in de database (enum-compatibiliteit). Kanaalkeuze blijft lokaal bewaard."
+          })
+        }
+      }
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     }
   }
