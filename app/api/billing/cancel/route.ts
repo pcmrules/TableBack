@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import Stripe from "stripe"
 import { getSessionUserFromCookieHeader } from "@/lib/server/auth"
 import {
   getStripeClient,
@@ -22,9 +23,10 @@ export async function POST(request: Request) {
   }
 
   const stripe = getStripeClient()
-  const subscription = await stripe.subscriptions.update(billing.stripeSubscriptionId, {
+  const updated = await stripe.subscriptions.update(billing.stripeSubscriptionId, {
     cancel_at_period_end: true
   })
+  const subscription = ("data" in updated ? updated.data : updated) as Stripe.Subscription
 
   await updateRestaurantBillingState({
     restaurantId: billing.restaurantId,
@@ -37,6 +39,6 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
-    currentPeriodEnd: new Date(subscription.current_period_end * 1000).toISOString()
+    currentPeriodEnd: null
   })
 }

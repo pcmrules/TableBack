@@ -36,17 +36,29 @@ export async function GET(request: Request) {
         const subscription = await stripe.subscriptions.retrieve(
           billing.stripeSubscriptionId
         )
-        nextPaymentAt = new Date(subscription.current_period_end * 1000).toISOString()
-        cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end)
+        const sub = ("data" in subscription ? subscription.data : subscription) as {
+          current_period_end?: number
+          cancel_at_period_end?: boolean
+        }
+        nextPaymentAt =
+          typeof sub.current_period_end === "number"
+            ? new Date(sub.current_period_end * 1000).toISOString()
+            : null
+        cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end)
       } else if (billing.stripeCustomerId) {
         const subscriptions = await stripe.subscriptions.list({
           customer: billing.stripeCustomerId,
           status: "all",
           limit: 1
         })
-        const sub = subscriptions.data[0] as Stripe.Subscription | undefined
+        const sub = subscriptions.data[0] as
+          | (Stripe.Subscription & { current_period_end?: number })
+          | undefined
         if (sub) {
-          nextPaymentAt = new Date(sub.current_period_end * 1000).toISOString()
+          nextPaymentAt =
+            typeof sub.current_period_end === "number"
+              ? new Date(sub.current_period_end * 1000).toISOString()
+              : null
           cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end)
         }
       }
