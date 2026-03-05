@@ -1,9 +1,9 @@
-import Link from "next/link"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 import CheckoutButton from "./checkout-button"
 import { getSessionUserFromCookies } from "@/lib/server/auth"
-import { getUserBillingState } from "@/lib/server/billing"
+import { getUserBillingState, isAdminEmail } from "@/lib/server/billing"
+import LogoutFromBillingButton from "./logout-from-billing-button"
 
 export default async function BillingPage({
   searchParams
@@ -20,7 +20,7 @@ export default async function BillingPage({
     redirect("/")
   }
 
-  if (billing.paid) {
+  if (billing.paid || isAdminEmail(user.email)) {
     redirect("/dashboard")
   }
 
@@ -68,10 +68,10 @@ export default async function BillingPage({
         </div>
 
         <div className="mt-6 text-sm text-gray-500">
-          Eerst iets wijzigen?
-          <Link href="/" className="ml-1 font-medium text-[#1f3d2b] underline">
-            Terug naar login
-          </Link>
+          <p>Eerst iets wijzigen of met een ander account inloggen?</p>
+          <div className="mt-2">
+            <LogoutFromBillingButton />
+          </div>
         </div>
       </section>
     </main>

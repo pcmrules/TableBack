@@ -33,6 +33,22 @@ export function isPaidStatus(status: BillingStatus): boolean {
   return status === "active" || status === "trialing"
 }
 
+export function isAdminEmail(email: string): boolean {
+  const normalized = email.trim().toLowerCase()
+  if (!normalized) return false
+
+  if (normalized === "thomas.zgeel@gmail.com") {
+    return true
+  }
+
+  const fromEnv = (process.env.ADMIN_EMAILS ?? "")
+    .split(",")
+    .map(item => item.trim().toLowerCase())
+    .filter(Boolean)
+
+  return fromEnv.includes(normalized)
+}
+
 export function mapStripeSubscriptionStatus(
   status: Stripe.Subscription.Status
 ): BillingStatus {

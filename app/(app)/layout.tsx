@@ -3,7 +3,7 @@ import Link from "next/link"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 import { getSessionUserFromCookies } from "@/lib/server/auth"
-import { getUserBillingState } from "@/lib/server/billing"
+import { getUserBillingState, isAdminEmail } from "@/lib/server/billing"
 import LogoutButton from "./logout-button"
 import { Providers } from "../providers"
 
@@ -18,7 +18,7 @@ export default async function AppLayout({
   }
 
   const billing = await getUserBillingState(user.id)
-  if (!billing || !billing.paid) {
+  if (!isAdminEmail(user.email) && (!billing || !billing.paid)) {
     redirect("/billing")
   }
 

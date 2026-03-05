@@ -18,10 +18,11 @@ export default function HomePage() {
       if (!response.ok) return
       const payload = (await response.json()) as {
         ok?: boolean
+        admin?: boolean
         billing?: { paid?: boolean }
       }
       if (payload.ok) {
-        router.replace(payload.billing?.paid ? "/dashboard" : "/billing")
+        router.replace(payload.admin || payload.billing?.paid ? "/dashboard" : "/billing")
       }
     })()
   }, [router])

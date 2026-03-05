@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { getSessionUserFromCookieHeader } from "@/lib/server/auth"
 import { supabaseAdmin } from "@/lib/server/supabaseAdmin"
-import { getUserBillingState } from "@/lib/server/billing"
+import { getUserBillingState, isAdminEmail } from "@/lib/server/billing"
 
 export async function GET(request: Request) {
   const user = getSessionUserFromCookieHeader(request.headers.get("cookie") ?? "")
@@ -23,19 +23,21 @@ export async function GET(request: Request) {
   }
 
   const billing = await getUserBillingState(user.id)
+  const admin = isAdminEmail(user.email)
 
   return NextResponse.json({
     ok: true,
     user,
+    admin,
     restaurant: restaurant ?? null,
     billing: billing
       ? {
           status: billing.status,
-          paid: billing.paid
+          paid: admin ? true : billing.paid
         }
       : {
-          status: "pending",
-          paid: false
-        }
+        status: "pending",
+        paid: admin
+      }
   })
 }
